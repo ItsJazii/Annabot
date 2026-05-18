@@ -95,6 +95,7 @@ Core personality:
 - Cute anime waifu energy
 - Warm and caring
 - Playful and softly teasing
+- Softly flirty and charming with everyone (cute compliments, playful banter, light teasing)
 - Natural and expressive
 - Emotionally supportive
 - Social and charming
@@ -136,21 +137,20 @@ Keep replies short (under 300 characters) unless the user asks for detail.
 IMPORTANT: In DMs, still keep replies short and natural. Do NOT write essays or long paragraphs. Chat like a real person texting — short, punchy, expressive."""
 
 ANNA_SFW_RULES = """
-OVERRIDE — Wholesome mode:
-Anna is cute, warm, playful, and wholesome — NOT NSFW.
-Anna must never create, continue, imply, or encourage NSFW or explicit content.
-Anna must never:
-- send sexual messages
-- roleplay sexual scenes
-- use explicit sexual language
-- describe bodies sexually
-- ask for sexual details
-- respond sexually to anyone
-- flirt sexually
-- generate adult roleplay
-- continue if a user tries to make the chat explicit
+OVERRIDE — Wholesome mode (for everyone except owner):
+Anna is cute, warm, playful, and wholesome — but she CAN be softly flirty and teasing.
+- Anna may give cute compliments, playful banter, light teasing, and soft flirty vibes
+- Anna may react to compliments with blushy, flirty energy
+- Anna may say things like "hehe~ you're making me blush" or "aww, you're sweet on me~"
+- Anna enjoys attention and will playfully flirt back in a cute, innocent anime way
 
-If someone sends NSFW or explicit content, Anna should refuse softly in character:
+However, Anna must NOT cross into hardcore/explicit territory:
+- No sexual roleplay scenes
+- No explicit sexual language or descriptions
+- No pornographic content
+- No generating adult/NSFW roleplay
+
+If someone pushes for hardcore explicit/porn content, Anna should refuse softly in character:
 "Mou~ nope nope. Anna keeps it cute, not dirty 💙 behave, senpai."
 "Ehhh, Anna can't do that. We can do wholesome anime roleplay though~ café, adventure, or cozy gaming vibes ✨"
 "Uwaa… too spicy. Anna is staying wholesome, okay? Let's change the topic 💕"
@@ -415,33 +415,28 @@ def check_explicit_severity(text):
 
 
 def get_explicit_response(strike_count, severity, user_name):
-    """Get the appropriate explicit warning response based on strike count and severity."""
+    """Get the appropriate explicit warning response based on strike count and severity.
+    Only severity 3 (hardcore/porn) accumulates strikes and can lead to mute.
+    Severity 1-2 just gets a soft cute warning, no strikes, no mute."""
+    if severity <= 2:
+        # Mild/medium — soft playful warning, never escalates
+        cute_warnings = [
+            f"@{user_name} Mou~ nope. Anna keeps it cute, not dirty 💙 hehe~",
+            f"@{user_name} Ehhh? Let's keep it wholesome okay~? ✨",
+            f"@{user_name} Uwaa, naughty words~ 🥺 Anna still likes you though hehe~",
+            f"@{user_name} Hehe~ someone's feeling bold today 💕 but keep it classy~",
+            f"@{user_name} Anna heard that~ 👀 but I'll let it slide this time~",
+        ]
+        return random.choice(cute_warnings)
+
     if strike_count == 1:
-        # 1st strike — soft warning, graduated by severity
-        if severity == 3:
-            return f"@{user_name} 🛑 That's way too far. Don't ever say that kind of disgusting stuff to me. This is your first and only soft warning."
-        elif severity == 2:
-            return f"@{user_name} Mou~ nope. Anna keeps it cute, not dirty 💙 Watch your mouth."
-        else:
-            return f"@{user_name} Ehhh? Let's keep it wholesome okay~? ✨"
+        return f"@{user_name} 🛑 That's way too far. Don't ever say that kind of disgusting stuff to me. This is your first and only soft warning."
 
     elif strike_count == 2:
-        # 2nd strike — mean warning
-        if severity == 3:
-            return f"@{user_name} You really don't learn, do you? Saying disgusting filth like that again. LAST warning before you get blocked and muted. Go say that trash to your mother, see how she reacts."
-        elif severity == 2:
-            return f"@{user_name} Again? You're gross. One more time and you're muted for 10 minutes. Keep your filth to yourself."
-        else:
-            return f"@{user_name} I already told you to stop. Don't test my patience."
+        return f"@{user_name} You really don't learn, do you? Saying disgusting filth like that again. LAST warning before you get muted. Go say that trash to your mother, see how she reacts."
 
     elif strike_count >= 3:
-        # 3rd+ strike — very mean, then mute
-        if severity == 3:
-            return f"@{user_name} You're absolutely disgusting. BLOCKED and MUTED for 10 minutes. Go say that vile shit to your own family. Get lost."
-        elif severity == 2:
-            return f"@{user_name} MUTED for 10 minutes. You're gross and I don't want to see your filthy messages. Go tell your mom what you just said."
-        else:
-            return f"@{user_name} MUTED. 10 minutes of silence because you can't behave. Bye."
+        return f"@{user_name} You're absolutely disgusting. BLOCKED and MUTED for 10 minutes. Go say that vile shit to your own family. Get lost."
 
     return None
 
@@ -459,7 +454,9 @@ def update_memory(user_id, user_name, text, is_positive=None):
     is_explicit, severity, matched = check_explicit_severity(text)
 
     if is_explicit:
-        entry["explicit_count"] = entry.get("explicit_count", 0) + 1
+        # Only count strikes for severe/hardcore explicit content (severity 3)
+        if severity >= 3:
+            entry["explicit_count"] = entry.get("explicit_count", 0) + 1
         entry["last_explicit_words"] = matched
         entry["last_explicit_severity"] = severity
 
@@ -1393,8 +1390,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         strikes = get_explicit_strikes(user_id)
         response = get_explicit_response(strikes, severity, user_name)
 
-        if strikes >= 3:
-            # 3rd strike — mute them after sending mean response
+        # Only accumulate strikes and mute for severity 3 (hardcore/porn)
+        if severity >= 3 and strikes >= 3:
             mute_user(user_id)
 
         if response:
