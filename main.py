@@ -623,6 +623,7 @@ async def setup_commands(application):
         BotCommand("disableauto", "Disable auto-translate (admin only)"),
         BotCommand("status", "Check bot status"),
         BotCommand("tldr", "TLDR of the last 6 hours"),
+        BotCommand("tldrdebug", "Owner: debug TLDR buffer (owner only)"),
         BotCommand("goon", "Send a random sticker"),
     ]
     await application.bot.set_my_commands(commands)
@@ -1419,7 +1420,54 @@ async def tldr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_title = update.effective_chat.title or "this group"
     summary = await generate_tldr(chat_id, chat_title)
-    await update.message.reply_text(f"📋 TLDR for {chat_title}~\n\n{summary}")
+    reply_text = f"📋 TLDR for {chat_title}~\n\n{summary}"
+    # If buffer is empty, add a helpful hint about privacy mode
+    if chat_id not in _group_message_buffer or not _group_message_buffer[chat_id]:
+        reply_text += "\n\n💡 If the chat was active but I see nothing, my privacy mode might be ON. Ask the group admin to go to @BotFather → Bot Settings → Group Privacy → turn OFF."
+    await update.message.reply_text(reply_text)
+
+
+async def tldr_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: debug the TLDR buffer for current chat."""
+    track_user(update.effective_user)
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    if not is_owner(user_id):
+        await update.message.reply_text("Mou~ this is for my owner only 💙")
+        return
+
+    if is_private_chat(update):
+        await update.message.reply_text("Use this in a group, master~ 💫")
+        return
+
+    if chat_id not in _group_message_buffer or not _group_message_buffer[chat_id]:
+        await update.message.reply_text(
+            f"Buffer for this chat is EMPTY, master~ 💤\n"
+            f"Possible causes:\n"
+            f"1. Bot privacy mode is ON — go to @BotFather → Bot Settings → Group Privacy → turn OFF\n"
+            f"2. No messages in last {TLDR_WINDOW_HOURS}h\n"
+            f"3. Handler not firing (check logs)"
+        )
+        return
+
+    messages = _group_message_buffer[chat_id]
+    total = len(messages)
+    user_counts = {}
+    for _, username, _, _ in messages:
+        user_counts[username] = user_counts.get(username, 0) + 1
+
+    lines = [f"Buffer for this chat: {total} messages", ""]
+    for u, c in sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+        lines.append(f"  {u}: {c}")
+
+    # Show last 5 messages
+    lines.extend(["", "Last 5 captured:"])
+    for ts, username, text, msg_type in messages[-5:]:
+        time_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%I:%M %p")
+        lines.append(f"  [{time_str}] {username}: ({msg_type}) {text[:50]}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def capture_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1436,21 +1484,34 @@ async def capture_group_message(update: Update, context: ContextTypes.DEFAULT_TY
     if not user:
         return
 
+    # Skip bot's own messages to avoid infinite loops, but DO capture them for TLDR
+    # We capture everything except commands
     username = user.first_name or user.username or "Someone"
 
     # Capture text messages
     if update.message.text and not update.message.text.startswith("/"):
         _add_message_to_buffer(chat_id, username, update.message.text, "text")
+        logger.debug(f"TLDR captured text in {chat_id}: {username} said {update.message.text[:30]}...")
         return
 
     # Capture photo captions
     if update.message.photo and update.message.caption:
         _add_message_to_buffer(chat_id, username, update.message.caption, "photo")
+        logger.debug(f"TLDR captured photo caption in {chat_id}: {username}")
         return
 
     # Capture video captions
     if update.message.video and update.message.caption:
         _add_message_to_buffer(chat_id, username, update.message.caption, "video")
+        logger.debug(f"TLDR captured video caption in {chat_id}: {username}")
+        return
+
+    # Capture media without captions too (just mark as shared)
+    if update.message.photo and not update.message.caption:
+        _add_message_to_buffer(chat_id, username, "[shared a photo]", "photo")
+        return
+    if update.message.video and not update.message.caption:
+        _add_message_to_buffer(chat_id, username, "[shared a video]", "video")
         return
 
 
@@ -1742,6 +1803,7 @@ def run_bot():
             application.add_handler(CommandHandler("image", image_command))
             application.add_handler(CommandHandler("video", video_command))
             application.add_handler(CommandHandler("tldr", tldr_command))
+            application.add_handler(CommandHandler("tldrdebug", tldr_debug_command))
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
