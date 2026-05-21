@@ -622,6 +622,7 @@ async def setup_commands(application):
         BotCommand("auto", "Enable auto-translate (admin only)"),
         BotCommand("disableauto", "Disable auto-translate (admin only)"),
         BotCommand("status", "Check bot status"),
+        BotCommand("tldr", "TLDR of the last 6 hours"),
         BotCommand("goon", "Send a random sticker"),
     ]
     await application.bot.set_my_commands(commands)
@@ -1285,6 +1286,175 @@ async def web_search(query, num_results=3):
 
 
 # =========================
+# TLDR FEATURE
+# =========================
+def _cleanup_buffer(chat_id):
+    """Remove messages older than TLDR_WINDOW_HOURS from the buffer."""
+    cutoff = time.time() - (TLDR_WINDOW_HOURS * 3600)
+    if chat_id in _group_message_buffer:
+        _group_message_buffer[chat_id] = [
+            msg for msg in _group_message_buffer[chat_id] if msg[0] > cutoff
+        ]
+
+
+def _add_message_to_buffer(chat_id, username, text, msg_type="text"):
+    """Store a message in the rolling buffer."""
+    if chat_id not in _group_message_buffer:
+        _group_message_buffer[chat_id] = []
+    _group_message_buffer[chat_id].append((time.time(), username, text, msg_type))
+    _cleanup_buffer(chat_id)
+
+
+async def generate_tldr(chat_id, chat_title="this group"):
+    """Generate a TLDR summary of the last 6 hours using the LLM."""
+    if chat_id not in _group_message_buffer or not _group_message_buffer[chat_id]:
+        return "Nothing much happened in the last 6 hours~ pretty quiet 💤"
+
+    messages = _group_message_buffer[chat_id]
+    if len(messages) == 0:
+        return "Nothing much happened in the last 6 hours~ pretty quiet 💤"
+
+    # Build transcript
+    lines = []
+    for ts, username, text, msg_type in messages:
+        time_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%I:%M %p")
+        prefix = ""
+        if msg_type == "photo":
+            prefix = "[sent a photo] "
+        elif msg_type == "video":
+            prefix = "[sent a video] "
+        lines.append(f"[{time_str}] {username}: {prefix}{text}")
+
+    transcript = "\n".join(lines)
+
+    # Truncate if too long (keep last ~100 messages for LLM context)
+    if len(lines) > 100:
+        transcript = "\n".join(lines[-100:])
+
+    tldr_prompt = f"""You are Anna, a cute anime waifu assistant. Summarize the last {TLDR_WINDOW_HOURS} hours of this Telegram group chat as a short, fun TLDR.
+
+Rules:
+- Keep it under 300 characters
+- Mention key topics, drama, funny moments, decisions made, and who was most active
+- Use your cute anime personality (short sentences, simple English, 1-2 emojis max)
+- If there were photos/videos shared, mention that briefly
+- Be natural and punchy, like a friend catching someone up
+
+Chat transcript:
+{transcript}
+
+TLDR:"""
+
+    # Try providers for TLDR
+    response = None
+    if groq_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": tldr_prompt}],
+                    max_tokens=200,
+                    temperature=0.8
+                )
+            )
+        except Exception as e:
+            logger.error(f"Groq TLDR failed: {e}")
+
+    if not response and cerebras_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: cerebras_client.chat.completions.create(
+                    model="llama3.1-8b",
+                    messages=[{"role": "user", "content": tldr_prompt}],
+                    max_tokens=200,
+                    temperature=0.8
+                )
+            )
+        except Exception as e:
+            logger.error(f"Cerebras TLDR failed: {e}")
+
+    if not response and openrouter_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: openrouter_client.chat.completions.create(
+                    model="meta-llama/llama-3.1-8b-instruct",
+                    messages=[{"role": "user", "content": tldr_prompt}],
+                    max_tokens=200,
+                    temperature=0.8
+                )
+            )
+        except Exception as e:
+            logger.error(f"OpenRouter TLDR failed: {e}")
+
+    if response and response.choices:
+        summary = response.choices[0].message.content.strip()[:500]
+        if summary:
+            return summary
+
+    # Fallback: simple summary if LLM fails
+    user_counts = {}
+    for _, username, _, _ in messages:
+        user_counts[username] = user_counts.get(username, 0) + 1
+    top_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    active_text = ", ".join([f"{u} ({c} msgs)" for u, c in top_users])
+    return f"Last {TLDR_WINDOW_HOURS}h summary: {len(messages)} messages. Most active: {active_text}~ 💫 (Anna's brain is a lil tired for a full summary rn 😅)"
+
+
+async def tldr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tldr command — summarize the last 6 hours in the group."""
+    track_user(update.effective_user)
+    chat_id = update.effective_chat.id
+
+    if is_private_chat(update):
+        await update.message.reply_text("TLDR only works in groups~ bring me to a chat first! 💫")
+        return
+
+    # Rate limit
+    now = time.time()
+    last_used = _tldr_cooldown.get(chat_id, 0)
+    if now - last_used < TLDR_COOLDOWN_SECONDS:
+        await update.message.reply_text("Anna's still digesting the chat~ wait a minute before another TLDR 💤")
+        return
+    _tldr_cooldown[chat_id] = now
+
+    chat_title = update.effective_chat.title or "this group"
+    summary = await generate_tldr(chat_id, chat_title)
+    await update.message.reply_text(f"📋 TLDR for {chat_title}~\n\n{summary}")
+
+
+async def capture_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Silently capture all group messages for TLDR buffer."""
+    if not update.message:
+        return
+
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        return
+
+    chat_id = chat.id
+    user = update.message.from_user
+    if not user:
+        return
+
+    username = user.first_name or user.username or "Someone"
+
+    # Capture text messages
+    if update.message.text and not update.message.text.startswith("/"):
+        _add_message_to_buffer(chat_id, username, update.message.text, "text")
+        return
+
+    # Capture photo captions
+    if update.message.photo and update.message.caption:
+        _add_message_to_buffer(chat_id, username, update.message.caption, "photo")
+        return
+
+    # Capture video captions
+    if update.message.video and update.message.caption:
+        _add_message_to_buffer(chat_id, username, update.message.caption, "video")
+        return
+
+
+# =========================
 # ANNA PERSONALITY CHAT
 # =========================
 # Rate limit tracking (using lists as mutable refs to avoid global keyword)
@@ -1294,6 +1464,15 @@ _rate_limit_notified_ref = [False]  # whether we already told the user
 # Session conversation memory: {(chat_id, user_id): [{"role": "user"/"assistant", "content": "..."}]}
 _conversation_history = {}
 MAX_HISTORY = 15  # Keep last 15 messages per user per chat
+
+# =========================
+# GROUP MESSAGE BUFFER (for TLDR)
+# =========================
+# Structure: {chat_id: [(timestamp, username, text, msg_type), ...]}
+_group_message_buffer = {}
+TLDR_WINDOW_HOURS = 6
+TLDR_COOLDOWN_SECONDS = 60
+_tldr_cooldown = {}  # {chat_id: last_used_timestamp}
 
 
 def get_conversation_key(chat_id, user_id):
@@ -1372,6 +1551,24 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Skip if it's a command
     if text.startswith("/"):
+        return
+
+    # Natural language TLDR trigger
+    tldr_phrases = ["gimme tldr", "give me tldr", "anna tldr", "tldr pls", "tldr please", "summarize", "what happened", "what did i miss"]
+    is_tldr_request = any(phrase in text_lower for phrase in tldr_phrases)
+
+    if is_tldr_request and not is_private:
+        # Rate limit
+        now = time.time()
+        last_used = _tldr_cooldown.get(chat_id, 0)
+        if now - last_used < TLDR_COOLDOWN_SECONDS:
+            await update.message.reply_text("Anna's still digesting the chat~ wait a minute before another TLDR 💤")
+            return
+        _tldr_cooldown[chat_id] = now
+
+        chat_title = update.effective_chat.title or "this group"
+        summary = await generate_tldr(chat_id, chat_title)
+        await update.message.reply_text(f"📋 TLDR for {chat_title}~\n\n{summary}")
         return
 
     # Get user's name for context
@@ -1544,9 +1741,16 @@ def run_bot():
             application.add_handler(CommandHandler("goon", goon_command))
             application.add_handler(CommandHandler("image", image_command))
             application.add_handler(CommandHandler("video", video_command))
+            application.add_handler(CommandHandler("tldr", tldr_command))
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
+
+            # Message capture for TLDR (runs first, group=0)
+            application.add_handler(MessageHandler(
+                filters.ALL & ~filters.COMMAND,
+                capture_group_message
+            ), group=0)
 
             # Anna personality chat handler (triggers on mention, reply, or active convo)
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anna_chat), group=2)
