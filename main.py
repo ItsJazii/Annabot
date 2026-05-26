@@ -226,6 +226,7 @@ if CEREBRAS_API_KEY:
         logger.error(f"Cerebras setup failed: {e}")
 
 openrouter_client = None
+perplexity_client = None
 if OPENROUTER_API_KEY:
     try:
         from openai import OpenAI as OpenRouterClient
@@ -241,6 +242,14 @@ if OPENROUTER_API_KEY:
         if not gemini_model:
             gemini_model = True
         logger.info("OpenRouter AI (Llama 3.1 8B) connected as PRIMARY — 5s timeout, fast fail! ⚡")
+        
+        # Perplexity Sonar for web search (built-in search capability)
+        perplexity_client = OpenRouterClient(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            http_client=httpx.Client(transport=httpx.HTTPTransport(retries=1), timeout=8.0)
+        )
+        logger.info("Perplexity Sonar (web search) connected! 🔍")
     except Exception as e:
         logger.error(f"OpenRouter setup failed: {e}")
 
@@ -1630,33 +1639,30 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# WEB SEARCH HELPER
+# WEB SEARCH (Perplexity Sonar via OpenRouter)
 # =========================
-async def web_search(query, num_results=3):
-    """Search the web using Google Custom Search and return snippets."""
-    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+def web_search(query):
+    """Search the web using Perplexity Sonar (built-in search capability)."""
+    if not perplexity_client:
         return None
+    
     try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            "key": GOOGLE_API_KEY,
-            "cx": GOOGLE_CSE_ID,
-            "q": query,
-            "num": num_results,
-        }
-        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
-        data = response.json()
-        if "items" not in data:
-            return None
-        results = []
-        for item in data["items"]:
-            title = item.get("title", "")
-            snippet = item.get("snippet", "")
-            results.append(f"{title}: {snippet}")
-        return "\n".join(results)
+        response = perplexity_client.chat.completions.create(
+            model="perplexity/sonar",
+            messages=[
+                {"role": "system", "content": "You are a helpful search assistant. Search the web and provide concise, factual answers. Include relevant details and sources when possible."},
+                {"role": "user", "content": query}
+            ],
+            max_tokens=200,
+            temperature=0.3
+        )
+        
+        if response.choices:
+            return response.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"Web search failed: {e}")
-        return None
+        logger.error(f"Perplexity search failed: {e}")
+    
+    return None
 
 
 # =========================
@@ -2090,11 +2096,11 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         needs_search = any(indicator in text_lower for indicator in question_indicators)
 
         search_context = ""
-        if needs_search and GOOGLE_API_KEY and GOOGLE_CSE_ID:
+        if needs_search and perplexity_client:
             # Extract the actual question (remove "anna" from the query)
             search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
             if len(search_query) > 3:
-                search_results = await web_search(search_query)
+                search_results = await asyncio.to_thread(web_search, search_query)
                 if search_results:
                     search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
 
