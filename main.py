@@ -229,13 +229,18 @@ openrouter_client = None
 if OPENROUTER_API_KEY:
     try:
         from openai import OpenAI as OpenRouterClient
+        import httpx
+        # Custom transport with 5-second timeout for fast fail
+        transport = httpx.HTTPTransport(retries=1)
+        http_client = httpx.Client(transport=transport, timeout=5.0)
         openrouter_client = OpenRouterClient(
             api_key=OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1"
+            base_url="https://openrouter.ai/api/v1",
+            http_client=http_client
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("OpenRouter AI (Llama 3.1 8B) connected as PRIMARY — cheap + fast replies! ⚡")
+        logger.info("OpenRouter AI (Llama 3.1 8B) connected as PRIMARY — 5s timeout, fast fail! ⚡")
     except Exception as e:
         logger.error(f"OpenRouter setup failed: {e}")
 
