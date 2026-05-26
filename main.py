@@ -210,7 +210,7 @@ if GROQ_API_KEY:
     try:
         groq_client = Groq(api_key=GROQ_API_KEY)
         gemini_model = True
-        logger.info("Groq AI connected successfully!")
+        logger.info("Groq AI connected as fallback #1 (free tier, 30 req/min)")
     except Exception as e:
         logger.error(f"Groq setup failed: {e}")
 
@@ -223,7 +223,7 @@ if CEREBRAS_API_KEY:
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("Cerebras AI connected as fallback!")
+        logger.info("Cerebras AI connected as fallback #2!")
     except Exception as e:
         logger.error(f"Cerebras setup failed: {e}")
 
@@ -237,7 +237,7 @@ if OPENROUTER_API_KEY:
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("OpenRouter AI connected as fallback #2!")
+        logger.info("OpenRouter AI (Claude 3.5 Haiku) connected as PRIMARY — fast replies! ⚡")
     except Exception as e:
         logger.error(f"OpenRouter setup failed: {e}")
 
@@ -1668,9 +1668,22 @@ Chat transcript:
 
 TLDR:"""
 
-    # Try providers for TLDR
+    # Try providers for TLDR — OpenRouter first for speed
     response = None
-    if groq_client:
+    if openrouter_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: openrouter_client.chat.completions.create(
+                    model="anthropic/claude-3.5-haiku",
+                    messages=[{"role": "user", "content": tldr_prompt}],
+                    max_tokens=200,
+                    temperature=0.8
+                )
+            )
+        except Exception as e:
+            logger.warning(f"OpenRouter TLDR failed: {e}")
+
+    if not response and groq_client:
         try:
             response = await asyncio.to_thread(
                 lambda: groq_client.chat.completions.create(
@@ -1695,19 +1708,6 @@ TLDR:"""
             )
         except Exception as e:
             logger.error(f"Cerebras TLDR failed: {e}")
-
-    if not response and openrouter_client:
-        try:
-            response = await asyncio.to_thread(
-                lambda: openrouter_client.chat.completions.create(
-                    model="meta-llama/llama-3.1-8b-instruct",
-                    messages=[{"role": "user", "content": tldr_prompt}],
-                    max_tokens=200,
-                    temperature=0.8
-                )
-            )
-        except Exception as e:
-            logger.error(f"OpenRouter TLDR failed: {e}")
 
     if response and response.choices:
         summary = response.choices[0].message.content.strip()[:500]
@@ -2060,11 +2060,28 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Save user message to history (clean version without context tags)
         add_to_history(chat_id, user_id, "user", text)
 
-        # Try Groq first, fallback to Cerebras
+        # Provider priority: OpenRouter (paid, fast, reliable) → Groq (free) → Cerebras (free)
+        # This ensures Anna replies ASAP instead of waiting for free rate limits
         response = None
         used_provider = None
 
-        if groq_client:
+        # Try OpenRouter FIRST (paid = fast + reliable)
+        if openrouter_client:
+            try:
+                response = await asyncio.to_thread(
+                    lambda: openrouter_client.chat.completions.create(
+                        model="anthropic/claude-3.5-haiku",  # Fast, cheap, great at personality
+                        messages=messages,
+                        max_tokens=150,
+                        temperature=0.9
+                    )
+                )
+                used_provider = "openrouter-haiku"
+            except Exception as or_err:
+                logger.warning(f"OpenRouter failed: {or_err}")
+
+        # Fallback to Groq (free, fast when available)
+        if not response and groq_client:
             try:
                 response = await asyncio.to_thread(
                     lambda: groq_client.chat.completions.create(
@@ -2081,7 +2098,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     logger.error(f"Groq failed: {groq_err}")
 
-        # Fallback to Cerebras if Groq failed
+        # Fallback to Cerebras (free)
         if not response and cerebras_client:
             try:
                 response = await asyncio.to_thread(
@@ -2095,21 +2112,6 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 used_provider = "cerebras"
             except Exception as cerebras_err:
                 logger.error(f"Cerebras also failed: {cerebras_err}")
-
-        # Fallback to OpenRouter if both failed
-        if not response and openrouter_client:
-            try:
-                response = await asyncio.to_thread(
-                    lambda: openrouter_client.chat.completions.create(
-                        model="meta-llama/llama-3.1-8b-instruct",
-                        messages=messages,
-                        max_tokens=150,
-                        temperature=0.9
-                    )
-                )
-                used_provider = "openrouter"
-            except Exception as or_err:
-                logger.error(f"OpenRouter also failed: {or_err}")
 
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
