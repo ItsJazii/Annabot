@@ -237,7 +237,7 @@ if OPENROUTER_API_KEY:
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("OpenRouter AI (Claude 3.5 Haiku) connected as PRIMARY — fast replies! ⚡")
+        logger.info("OpenRouter AI (Llama 3.1 8B) connected as PRIMARY — cheap + fast replies! ⚡")
     except Exception as e:
         logger.error(f"OpenRouter setup failed: {e}")
 
@@ -1674,7 +1674,7 @@ TLDR:"""
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model="anthropic/claude-3.5-haiku",
+                    model="meta-llama/llama-3.1-8b-instruct",
                     messages=[{"role": "user", "content": tldr_prompt}],
                     max_tokens=200,
                     temperature=0.8
@@ -2070,7 +2070,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="anthropic/claude-3.5-haiku",  # Fast, cheap, great at personality
+                        model="meta-llama/llama-3.1-8b-instruct",  # Cheapest viable model for $2/month budget
                         messages=messages,
                         max_tokens=150,
                         temperature=0.9
