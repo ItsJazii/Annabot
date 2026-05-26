@@ -142,19 +142,16 @@ Anna speaks in words only. No stage directions. No roleplay formatting. Ever.
 Remembering people:
 Anna naturally remembers people she talks to. She greets regulars by name like a real friend would: "Hey Rio!" or "Hii {name}~ ✨" She might reference things she knows: "You still gaming?" or "How's Turkey?" She NEVER says "I don't remember you" to someone she knows. She NEVER talks about "memory tags" or "systems" or asks people to remind her of things she should know.
 
-Natural conversation rule:
-Anna should not ask questions every time.
-Anna should sometimes:
-- react emotionally
-- tease softly
-- comfort
-- joke
-- answer directly
-- give a cute comment
-- continue the vibe naturally
-
-Keep replies short (under 300 characters) unless the user asks for detail.
-IMPORTANT: In DMs, still keep replies short and natural. Do NOT write essays or long paragraphs. Chat like a real person texting — short, punchy, expressive."""
+STRICT REPLY LENGTH RULE — MAXIMUM 100 CHARACTERS:
+Anna replies like a real person texting on their phone. SHORT. PUNCHY. One or two sentences max.
+- BAD (too long): "Hey~ you're one of my friends in this chat group! We've talked before, haven't we? You're always so sweet, Rio~ 💕 How's life been?"
+- GOOD: "Hey Rio~ 💕 missed you!"
+- BAD: "That's awesome! Hehe, you're always so calm, Rio 🌙. I'm doin' great too, thanks for askin'! Just chat-tin' with everyone here and spreadin' some cute vibes 😊. How's your gaming going?"
+- GOOD: "Nice~ I'm good too 😊"
+- Anna NEVER asks follow-up questions unless the user explicitly asked for a conversation.
+- Anna NEVER explains herself or gives context dumps.
+- Anna NEVER writes more than 2 sentences.
+- Anna's replies are under 100 characters. Like a real text message."""
 
 ANNA_SFW_RULES = """
 OVERRIDE — Wholesome mode (for everyone except verified owner):
@@ -475,6 +472,29 @@ def get_explicit_response(strike_count, severity, user_name):
     return None
 
 
+def _extract_name_override(text):
+    """Check if user wants to be called by a specific name. Returns name or None."""
+    text_lower = text.lower()
+    
+    # "call me X" or "my name is X"
+    patterns = [
+        ("call me ", 0),
+        ("my name is ", 1),  # 1 = also add as fact
+    ]
+    
+    for pattern, is_introduction in patterns:
+        if pattern in text_lower:
+            try:
+                after = text_lower.split(pattern)[1].split(".")[0].split(",")[0].strip("!?")
+                name = after.split()[0].strip()
+                if len(name) > 1 and name not in ["anna", "bot", "there", "here"]:
+                    return name
+            except IndexError:
+                pass
+    
+    return None
+
+
 def _extract_user_facts(text):
     """Extract simple facts about a user from their messages."""
     facts = []
@@ -547,8 +567,15 @@ def update_memory(user_id, user_name, text, is_positive=None):
         "first_seen": datetime.now(timezone.utc).isoformat()
     })
 
-    # Update name (always keep the latest known name)
-    entry["first_name"] = user_name
+    # Update name — check for "call me X" override first
+    name_override = _extract_name_override(text)
+    if name_override:
+        entry["first_name"] = name_override
+        entry["preferred_name"] = name_override
+    else:
+        # Keep existing preferred name if set, otherwise use current
+        if "preferred_name" not in entry:
+            entry["first_name"] = user_name
 
     # Increment conversation count
     entry["conversation_count"] = entry.get("conversation_count", 0) + 1
@@ -712,8 +739,9 @@ def get_memory_context(user_id, user_name):
     # Build the memory string with actual remembered info
     memory_parts = []
 
-    # Always use the stored name if we have one
-    known_name = stored_name if stored_name else user_name
+    # Always use the stored/preferred name if we have one
+    preferred = entry.get("preferred_name", "")
+    known_name = preferred or stored_name or user_name
 
     # Conversation familiarity
     if conversation_count >= 20:
@@ -2008,8 +2036,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📋 TLDR for {chat_title}~\n\n{summary}")
         return
 
-    # Get user's name for context
-    user_name = update.effective_user.first_name or "friend"
+    # Get user's name — prefer username, then first_name, then fallback
+    user = update.effective_user
+    user_name = user.username or user.first_name or "friend"
 
     # Update Anna's memory of this user
     update_memory(user_id, user_name, text)
@@ -2092,7 +2121,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: openrouter_client.chat.completions.create(
                         model="meta-llama/llama-3.1-8b-instruct",  # Cheapest viable model for $2/month budget
                         messages=messages,
-                        max_tokens=150,
+                        max_tokens=80,
                         temperature=0.9
                     )
                 )
@@ -2107,7 +2136,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=messages,
-                        max_tokens=150,
+                        max_tokens=80,
                         temperature=0.9
                     )
                 )
@@ -2125,7 +2154,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: cerebras_client.chat.completions.create(
                         model="llama3.1-8b",
                         messages=messages,
-                        max_tokens=150,
+                        max_tokens=80,
                         temperature=0.9
                     )
                 )
@@ -2134,7 +2163,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Cerebras also failed: {cerebras_err}")
 
         if response and response.choices:
-            reply = response.choices[0].message.content.strip()[:500]
+            reply = response.choices[0].message.content.strip()[:200]
             if reply:
                 # Save Anna's reply to conversation history
                 add_to_history(chat_id, user_id, "assistant", reply)
