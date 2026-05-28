@@ -1543,6 +1543,42 @@ def get_crypto_price(crypto_name):
             "theta": "theta-token",
             "hype": "hyperliquid",
             "hyperliquid": "hyperliquid",
+            # Popular additions
+            "shiba": "shiba-inu",
+            "shib": "shiba-inu",
+            "pepe": "pepe",
+            "wif": "dogwifcoin",
+            "bonk": "bonk",
+            "sui": "sui",
+            "apt": "aptos",
+            "aptos": "aptos",
+            "near": "near",
+            "tia": "celestia",
+            "celestia": "celestia",
+            "arb": "arbitrum",
+            "arbitrum": "arbitrum",
+            "op": "optimism",
+            "optimism": "optimism",
+            "bnb": "binancecoin",
+            "binance coin": "binancecoin",
+            "ondo": "ondo-finance",
+            "jup": "jupiter-exchange-solana",
+            "jupiter": "jupiter-exchange-solana",
+            "fart": "fartcoin",
+            "fartcoin": "fartcoin",
+            "mega": "megaeth",
+            "megaeth": "megaeth",
+            "wld": "worldcoin-wld",
+            "worldcoin": "worldcoin-wld",
+            "render": "render-token",
+            "rndr": "render-token",
+            "fet": "fetch-ai",
+            "ena": "ethena",
+            "ethena": "ethena",
+            "tao": "bittensor",
+            "bittensor": "bittensor",
+            "kas": "kaspa",
+            "kaspa": "kaspa",
         }
         
         # Find the crypto ID
@@ -2279,7 +2315,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        "ripple", "xrp", "dogecoin", "doge", "polkadot", "dot", "litecoin", "ltc",
                        "chainlink", "link", "uniswap", "uni", "polygon", "matic", "avalanche", "avax",
                        "hype", "hyperliquid", "cosmos", "atom", "stellar", "xlm", "filecoin", "fil",
-                       "tron", "trx", "monero", "xmr", "tezos", "xtz", "algorand", "algo", "vechain", "vet"]
+                       "tron", "trx", "monero", "xmr", "tezos", "xtz", "algorand", "algo", "vechain", "vet",
+                       "shiba", "shib", "pepe", "wif", "bonk", "sui", "apt", "aptos", "near",
+                       "tia", "celestia", "arb", "arbitrum", "op", "optimism", "bnb",
+                       "ondo", "jup", "jupiter", "fart", "fartcoin", "mega", "megaeth",
+                       "wld", "worldcoin", "render", "rndr", "fet", "ena", "ethena",
+                       "tao", "bittensor", "kas", "kaspa"]
 
         # Word-boundary match so "uni" doesn't fire on "university", "fil" doesn't hit "file", etc.
         crypto_kw_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in crypto_keywords) + r")\b", re.IGNORECASE)
@@ -2341,11 +2382,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if openrouter_client:
             try:
                 if needs_search and openrouter_search_client:
-                    # Search-grounded call: longer timeout, more tokens, :online suffix
-                    logger.info(f"Anna :online search for: {text[:60]}")
+                    # Search-grounded call: use the web plugin via extra_body (more flexible
+                    # than the :online suffix — gives us max_results control). Don't combine
+                    # both — OpenRouter can choke if you pass :online AND a plugins config.
+                    logger.info(f"Anna web-search for: {text[:60]}")
                     response = await asyncio.to_thread(
                         lambda: openrouter_search_client.chat.completions.create(
-                            model="google/gemini-2.0-flash-001:online",
+                            model="google/gemini-2.0-flash-001",
                             messages=messages,
                             max_tokens=180,
                             temperature=0.8,
@@ -2362,7 +2405,24 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     )
             except Exception as or_err:
-                logger.warning(f"OpenRouter failed: {or_err}")
+                logger.warning(f"OpenRouter failed (search={needs_search}): {type(or_err).__name__}: {or_err}")
+
+        # If the search call failed, retry on plain Gemini WITHOUT search before
+        # falling back to other providers. Better to give a non-grounded answer
+        # than to give up entirely.
+        if needs_search and not response and openrouter_client:
+            try:
+                logger.info("Search call failed, retrying without web plugin")
+                response = await asyncio.to_thread(
+                    lambda: openrouter_client.chat.completions.create(
+                        model="google/gemini-2.0-flash-001",
+                        messages=messages,
+                        max_tokens=120,
+                        temperature=0.9
+                    )
+                )
+            except Exception as retry_err:
+                logger.warning(f"OpenRouter retry without search also failed: {type(retry_err).__name__}: {retry_err}")
 
         # Fallback to Groq (free, fast when available)
         if not response and groq_client:
@@ -2405,7 +2465,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mark_user_replied(user_id)
                 await update.message.reply_text(reply)
         elif not response:
-            # All providers failed
+            # All providers failed — log the trail so we can see why on Render
+            logger.error(f"All providers failed for user {user_id} in chat {chat_id} (search={needs_search}): {text[:100]}")
             _rate_limit_until_ref[0] = time.time() + 60
             if not _rate_limit_notified_ref[0]:
                 _rate_limit_notified_ref[0] = True
@@ -2414,8 +2475,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("AI returned empty response")
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
-        logger.error(f"Anna chat failed: {type(e).__name__}: {e}")
-        await update.message.reply_text(f"Debug: {type(e).__name__}: {str(e)[:200]}")
+        logger.error(f"Anna chat failed: {type(e).__name__}: {e}", exc_info=True)
+        # Don't leak raw exceptions to users — keep her in character
+        await update.message.reply_text("Eep~ something went weird in my head 😅 try once more?")
 
 
 async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
