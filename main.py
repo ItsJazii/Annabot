@@ -40,6 +40,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+CMC_API_KEY = os.getenv("CMC_API_KEY")  # Optional CoinMarketCap key
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -1496,187 +1497,331 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # CRYPTO PRICE API (CoinGecko - free, no API key needed)
 # =========================
-def get_crypto_price(crypto_name):
-    """Get real-time crypto price from CoinGecko.
-    Strategy: try the local map first (fast, common coins), then fall back to
-    CoinGecko's /search API for anything else (handles new coins automatically)."""
+# =========================
+# CRYPTO PRICE — DexScreener + CoinGecko + CoinMarketCap
+# =========================
+# Strategy in priority order:
+#   1. Contract address detected → DexScreener (works for any chain, any DEX)
+#   2. Ticker/name → CoinGecko local map (fast)
+#   3. Ticker/name → CoinGecko search API (auto-discovers new coins)
+#   4. Optional fallback → CoinMarketCap (if CMC_API_KEY is set)
+
+# Contract address patterns (EVM 0x + 40 hex, Solana base58 32–44 chars, Tron T...)
+_EVM_ADDR_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
+_SOLANA_ADDR_RE = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
+_TRON_ADDR_RE = re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b")
+
+
+def extract_contract_address(text):
+    """Return the first contract address found in text, or None.
+    Returns a tuple (address, kind) where kind is 'evm', 'solana', or 'tron'."""
+    m = _EVM_ADDR_RE.search(text)
+    if m:
+        return m.group(0), "evm"
+    m = _TRON_ADDR_RE.search(text)
+    if m:
+        return m.group(0), "tron"
+    # Solana check is last because base58 32-44 can over-match — make sure
+    # we don't accidentally treat a non-address word like that. Heuristic:
+    # require the string to actually look like a Solana mint (32-44 base58
+    # chars AND contain at least one digit AND not be a regular English-ish word).
+    for m in _SOLANA_ADDR_RE.finditer(text):
+        token = m.group(0)
+        if any(c.isdigit() for c in token) and not token.lower() in ("anna",):
+            return token, "solana"
+    return None, None
+
+
+def _format_price_change(price, change_24h):
+    """Format price + 24h change into a cute string."""
+    if price is None:
+        return None
+    if price >= 1000:
+        price_str = f"${price:,.2f}"
+    elif price >= 1:
+        price_str = f"${price:.4f}"
+    elif price >= 0.01:
+        price_str = f"${price:.6f}"
+    else:
+        # Very small prices — keep significant figures
+        price_str = f"${price:.10f}".rstrip("0").rstrip(".")
+        if not price_str.startswith("$"):
+            price_str = "$" + price_str
+
+    if change_24h is None:
+        return f"{price_str} (24h)"
+    if change_24h > 0:
+        change_str = f"📈 +{change_24h:.2f}%"
+    elif change_24h < 0:
+        change_str = f"📉 {change_24h:.2f}%"
+    else:
+        change_str = "➡️ 0.00%"
+    return f"{price_str} {change_str} (24h)"
+
+
+def _dexscreener_lookup(query, prefer_chain=None):
+    """Lookup a token by contract address or symbol via DexScreener.
+    Returns (display_name, price_usd, change_24h, extra_note) or None.
+    If prefer_chain is set, that chain's pair is preferred ONLY when one exists;
+    otherwise we pick the highest-liquidity pair across any chain (so an Arbitrum-only
+    token still resolves correctly even when prefer_chain='ethereum')."""
     try:
-        # Map common names to CoinGecko IDs (fast path)
-        crypto_map = {
-            "bitcoin": "bitcoin",
-            "btc": "bitcoin",
-            "ethereum": "ethereum",
-            "eth": "ethereum",
-            "solana": "solana",
-            "sol": "solana",
-            "cardano": "cardano",
-            "ada": "cardano",
-            "ripple": "ripple",
-            "xrp": "ripple",
-            "polkadot": "polkadot",
-            "dot": "polkadot",
-            "dogecoin": "dogecoin",
-            "doge": "dogecoin",
-            "polygon": "matic-network",
-            "matic": "matic-network",
-            "avalanche": "avalanche-2",
-            "avax": "avalanche-2",
-            "chainlink": "chainlink",
-            "link": "chainlink",
-            "litecoin": "litecoin",
-            "ltc": "litecoin",
-            "uniswap": "uniswap",
-            "uni": "uniswap",
-            "cosmos": "cosmos",
-            "atom": "cosmos",
-            "stellar": "stellar",
-            "xlm": "stellar",
-            "filecoin": "filecoin",
-            "fil": "filecoin",
-            "tron": "tron",
-            "trx": "tron",
-            "monero": "monero",
-            "xmr": "monero",
-            "tezos": "tezos",
-            "xtz": "tezos",
-            "algorand": "algorand",
-            "algo": "algorand",
-            "vechain": "vechain",
-            "vet": "vechain",
-            "theta": "theta-token",
-            "hype": "hyperliquid",
-            "hyperliquid": "hyperliquid",
-            "shiba": "shiba-inu",
-            "shib": "shiba-inu",
-            "pepe": "pepe",
-            "wif": "dogwifcoin",
-            "bonk": "bonk",
-            "sui": "sui",
-            "apt": "aptos",
-            "aptos": "aptos",
-            "near": "near",
-            "tia": "celestia",
-            "celestia": "celestia",
-            "arb": "arbitrum",
-            "arbitrum": "arbitrum",
-            "op": "optimism",
-            "optimism": "optimism",
-            "bnb": "binancecoin",
-            "binance coin": "binancecoin",
-            "ondo": "ondo-finance",
-            "jup": "jupiter-exchange-solana",
-            "jupiter": "jupiter-exchange-solana",
-            "fart": "fartcoin",
-            "fartcoin": "fartcoin",
-            "wld": "worldcoin-wld",
-            "worldcoin": "worldcoin-wld",
-            "render": "render-token",
-            "rndr": "render-token",
-            "fet": "fetch-ai",
-            "ena": "ethena",
-            "ethena": "ethena",
-            "tao": "bittensor",
-            "bittensor": "bittensor",
-            "kas": "kaspa",
-            "kaspa": "kaspa",
-        }
-
-        query_lower = crypto_name.lower()
-        crypto_id = None
-        # Try longer keys first to avoid "sol" matching inside "console" etc.
-        # We already use word boundaries at the call site, but be safe here too.
-        for key in sorted(crypto_map.keys(), key=len, reverse=True):
-            if re.search(r"\b" + re.escape(key) + r"\b", query_lower):
-                crypto_id = crypto_map[key]
-                break
-
-        # Fallback: use CoinGecko's search API to discover the id for any coin
-        # not in our hardcoded map (handles new launches automatically).
-        if not crypto_id:
-            # Strip filler words so "what's mega price" → "mega"
-            filler = (
-                r"\b(anna|what'?s|what is|what are|whats|whatsapp|tell me|"
-                r"price|worth|value|cost|how much|of|the|a|an|is|are|on|"
-                r"cmc|coingecko|coinmarketcap|coin|token|crypto|cryptocurrency|"
-                r"please|pls|now|today|current|latest)\b"
-            )
-            cleaned = re.sub(filler, "", query_lower)
-            cleaned = re.sub(r"[^\w\s-]", " ", cleaned)  # drop punctuation
-            cleaned = re.sub(r"\s+", " ", cleaned).strip()
-            if not cleaned:
-                return None
-            try:
-                search_resp = requests.get(
-                    "https://api.coingecko.com/api/v3/search",
-                    params={"query": cleaned},
-                    timeout=5,
-                )
-                search_data = search_resp.json()
-                coins = search_data.get("coins", [])
-                if coins:
-                    # Selection priority:
-                    # 1. Exact symbol match for the cleaned query (so "MEGA" → MEGA token, not MegaUSD)
-                    # 2. Exact name match (case-insensitive)
-                    # 3. Highest-ranked coin with a market_cap_rank set
-                    # 4. First result
-                    cleaned_upper = cleaned.upper()
-                    cleaned_lower_strip = cleaned.lower().strip()
-                    pick = None
-                    for c in coins:
-                        if (c.get("symbol") or "").upper() == cleaned_upper:
-                            pick = c
-                            break
-                    if not pick:
-                        for c in coins:
-                            if (c.get("name") or "").lower() == cleaned_lower_strip:
-                                pick = c
-                                break
-                    if not pick:
-                        ranked = [c for c in coins if c.get("market_cap_rank")]
-                        pick = ranked[0] if ranked else coins[0]
-                    crypto_id = pick.get("id")
-                    logger.info(f"CoinGecko search resolved {cleaned!r} -> {crypto_id} (symbol={pick.get('symbol')})")
-            except Exception as e:
-                logger.warning(f"CoinGecko search fallback failed: {e}")
-
-        if not crypto_id:
+        url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
+        r = requests.get(url, timeout=6)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        pairs = data.get("pairs") or []
+        if not pairs:
             return None
 
-        # Fetch price for the resolved id
-        url = "https://api.coingecko.com/api/v3/simple/price"
-        params = {
-            "ids": crypto_id,
-            "vs_currencies": "usd",
-            "include_24hr_change": "true",
-        }
-        response = requests.get(url, params=params, timeout=5)
-        data = response.json()
+        # Try the preferred chain first
+        chosen = None
+        if prefer_chain:
+            chain_pairs = [p for p in pairs if p.get("chainId") == prefer_chain]
+            if chain_pairs:
+                chain_pairs.sort(key=lambda p: float(((p.get("liquidity") or {}).get("usd") or 0)), reverse=True)
+                chosen = chain_pairs[0]
 
-        if crypto_id in data:
-            price = data[crypto_id]["usd"]
-            change_24h = data[crypto_id].get("usd_24h_change", 0)
+        if not chosen:
+            # Fall back to highest-liquidity pair across any chain
+            pairs.sort(key=lambda p: float(((p.get("liquidity") or {}).get("usd") or 0)), reverse=True)
+            chosen = pairs[0]
 
-            if price >= 1000:
-                price_str = f"${price:,.2f}"
-            elif price >= 1:
-                price_str = f"${price:.4f}"
-            else:
-                # Tiny prices need more decimals
-                price_str = f"${price:.8f}".rstrip("0").rstrip(".")
-                if not price_str.startswith("$"):
-                    price_str = "$" + price_str
-
-            if change_24h > 0:
-                change_str = f"📈 +{change_24h:.2f}%"
-            elif change_24h < 0:
-                change_str = f"📉 {change_24h:.2f}%"
-            else:
-                change_str = "➡️ 0.00%"
-
-            return f"{price_str} {change_str} (24h)"
-
+        base = chosen.get("baseToken") or {}
+        name = base.get("name") or base.get("symbol") or "Unknown"
+        symbol = base.get("symbol") or ""
+        price = float(chosen.get("priceUsd") or 0) or None
+        change_h24 = ((chosen.get("priceChange") or {}).get("h24"))
+        try:
+            change_h24 = float(change_h24) if change_h24 is not None else None
+        except (TypeError, ValueError):
+            change_h24 = None
+        chain = chosen.get("chainId") or ""
+        liquidity = float(((chosen.get("liquidity") or {}).get("usd") or 0))
+        # Warn user if liquidity is tiny — possible scam/illiquid token
+        note = ""
+        if liquidity and liquidity < 5000:
+            note = " ⚠️ very low liquidity"
+        elif liquidity and liquidity < 50000:
+            note = " ⚠️ low liquidity"
+        display = f"{name} ({symbol})" if symbol else name
+        if chain:
+            display += f" on {chain}"
+        return display, price, change_h24, note
     except Exception as e:
-        logger.error(f"Crypto price fetch failed: {e}")
+        logger.warning(f"DexScreener lookup failed: {e}")
+        return None
+
+
+def _coinmarketcap_lookup(symbol_or_name):
+    """Lookup price via CoinMarketCap. Requires CMC_API_KEY env var.
+    Returns (display_name, price_usd, change_24h) or None."""
+    if not CMC_API_KEY:
+        return None
+    try:
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        # Try as symbol first (uppercase), then as slug
+        upper = symbol_or_name.upper().replace(" ", "")
+        r = requests.get(
+            url,
+            params={"symbol": upper, "convert": "USD"},
+            headers={"X-CMC_PRO_API_KEY": CMC_API_KEY, "Accept": "application/json"},
+            timeout=6,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            payload = (data.get("data") or {}).get(upper)
+            # CMC may return a list when multiple coins share a symbol
+            if isinstance(payload, list) and payload:
+                payload = payload[0]
+            if payload:
+                quote = (payload.get("quote") or {}).get("USD") or {}
+                price = quote.get("price")
+                change = quote.get("percent_change_24h")
+                name = payload.get("name") or upper
+                return name, price, change
+        return None
+    except Exception as e:
+        logger.warning(f"CoinMarketCap lookup failed: {e}")
+        return None
+
+
+def _coingecko_lookup(query):
+    """Lookup price via CoinGecko (local map → /search → /simple/price).
+    Returns (display_name, price_usd, change_24h) or None."""
+    crypto_map = {
+        "bitcoin": "bitcoin", "btc": "bitcoin",
+        "ethereum": "ethereum", "eth": "ethereum",
+        "solana": "solana", "sol": "solana",
+        "cardano": "cardano", "ada": "cardano",
+        "ripple": "ripple", "xrp": "ripple",
+        "polkadot": "polkadot", "dot": "polkadot",
+        "dogecoin": "dogecoin", "doge": "dogecoin",
+        "polygon": "matic-network", "matic": "matic-network",
+        "avalanche": "avalanche-2", "avax": "avalanche-2",
+        "chainlink": "chainlink", "link": "chainlink",
+        "litecoin": "litecoin", "ltc": "litecoin",
+        "uniswap": "uniswap", "uni": "uniswap",
+        "cosmos": "cosmos", "atom": "cosmos",
+        "stellar": "stellar", "xlm": "stellar",
+        "filecoin": "filecoin", "fil": "filecoin",
+        "tron": "tron", "trx": "tron",
+        "monero": "monero", "xmr": "monero",
+        "tezos": "tezos", "xtz": "tezos",
+        "algorand": "algorand", "algo": "algorand",
+        "vechain": "vechain", "vet": "vechain",
+        "theta": "theta-token",
+        "hype": "hyperliquid", "hyperliquid": "hyperliquid",
+        "shiba": "shiba-inu", "shib": "shiba-inu",
+        "pepe": "pepe", "wif": "dogwifcoin", "bonk": "bonk",
+        "sui": "sui", "apt": "aptos", "aptos": "aptos", "near": "near",
+        "tia": "celestia", "celestia": "celestia",
+        "arb": "arbitrum", "arbitrum": "arbitrum",
+        "op": "optimism", "optimism": "optimism",
+        "bnb": "binancecoin", "binance coin": "binancecoin",
+        "ondo": "ondo-finance",
+        "jup": "jupiter-exchange-solana", "jupiter": "jupiter-exchange-solana",
+        "fart": "fartcoin", "fartcoin": "fartcoin",
+        "wld": "worldcoin-wld", "worldcoin": "worldcoin-wld",
+        "render": "render-token", "rndr": "render-token",
+        "fet": "fetch-ai",
+        "ena": "ethena", "ethena": "ethena",
+        "tao": "bittensor", "bittensor": "bittensor",
+        "kas": "kaspa", "kaspa": "kaspa",
+    }
+
+    query_lower = query.lower()
+    crypto_id = None
+    for key in sorted(crypto_map.keys(), key=len, reverse=True):
+        if re.search(r"\b" + re.escape(key) + r"\b", query_lower):
+            crypto_id = crypto_map[key]
+            break
+
+    # Fall back to CoinGecko search API for unknown coins
+    if not crypto_id:
+        filler = (
+            r"\b(anna|what'?s|what is|what are|whats|whatsapp|tell me|"
+            r"price|worth|value|cost|how much|of|the|a|an|is|are|on|"
+            r"cmc|coingecko|coinmarketcap|coin|token|crypto|cryptocurrency|"
+            r"please|pls|now|today|current|latest)\b"
+        )
+        cleaned = re.sub(filler, "", query_lower)
+        cleaned = re.sub(r"[^\w\s-]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return None
+        try:
+            search_resp = requests.get(
+                "https://api.coingecko.com/api/v3/search",
+                params={"query": cleaned},
+                timeout=5,
+            )
+            search_data = search_resp.json()
+            coins = search_data.get("coins", [])
+            if coins:
+                cleaned_upper = cleaned.upper()
+                cleaned_lower_strip = cleaned.lower().strip()
+                pick = None
+                for c in coins:
+                    if (c.get("symbol") or "").upper() == cleaned_upper:
+                        pick = c
+                        break
+                if not pick:
+                    for c in coins:
+                        if (c.get("name") or "").lower() == cleaned_lower_strip:
+                            pick = c
+                            break
+                if not pick:
+                    ranked = [c for c in coins if c.get("market_cap_rank")]
+                    pick = ranked[0] if ranked else coins[0]
+                crypto_id = pick.get("id")
+                logger.info(f"CoinGecko search resolved {cleaned!r} -> {crypto_id} (symbol={pick.get('symbol')})")
+        except Exception as e:
+            logger.warning(f"CoinGecko search fallback failed: {e}")
+
+    if not crypto_id:
+        return None
+
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": crypto_id, "vs_currencies": "usd", "include_24hr_change": "true"},
+            timeout=5,
+        )
+        data = r.json()
+        if crypto_id in data:
+            price = data[crypto_id].get("usd")
+            change = data[crypto_id].get("usd_24h_change")
+            return crypto_id, price, change
+    except Exception as e:
+        logger.warning(f"CoinGecko /simple/price failed: {e}")
+    return None
+
+
+def get_crypto_price(crypto_name):
+    """Get real-time crypto price.
+
+    Priority:
+      1. Contract address (any chain) → DexScreener
+      2. Ticker / name → CoinGecko (local map → search API)
+      3. Fallback → CoinMarketCap (if CMC_API_KEY set)
+      4. Final fallback for unknown ticker → DexScreener symbol search
+    """
+    # 1. Contract address detection
+    address, kind = extract_contract_address(crypto_name)
+    if address:
+        # Map our internal kind to DexScreener chainId for chain preference.
+        chain_hint = None
+        if kind == "evm":
+            chain_hint = "ethereum"  # most EVM addresses are on Ethereum; DexScreener
+            # will still find non-Ethereum chains if no Ethereum pair exists
+        elif kind == "solana":
+            chain_hint = "solana"
+        elif kind == "tron":
+            chain_hint = "tron"
+        result = _dexscreener_lookup(address, prefer_chain=chain_hint)
+        if result:
+            display, price, change, note = result
+            formatted = _format_price_change(price, change)
+            if formatted:
+                return f"{display}: {formatted}{note}"
+
+    # 2. CoinGecko lookup
+    cg = _coingecko_lookup(crypto_name)
+    if cg:
+        name, price, change = cg
+        formatted = _format_price_change(price, change)
+        if formatted:
+            return f"{formatted}"
+
+    # 3. CoinMarketCap fallback (only if key set)
+    if CMC_API_KEY:
+        # Pull the cleanest token name for CMC symbol lookup
+        filler = r"\b(anna|what'?s|what is|whats|tell me|price|worth|value|cost|how much|of|the|a|an|is|are|on|cmc|coingecko|coin|token|crypto|please|pls|now|today|current|latest)\b"
+        cleaned = re.sub(filler, "", crypto_name.lower())
+        cleaned = re.sub(r"[^\w\s]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            cmc = _coinmarketcap_lookup(cleaned)
+            if cmc:
+                name, price, change = cmc
+                formatted = _format_price_change(price, change)
+                if formatted:
+                    return f"{name}: {formatted}"
+
+    # 4. Last-resort DexScreener symbol search
+    filler = r"\b(anna|what'?s|whats|price|worth|value|cost|how much|of|the|a|is|on|please|now|today|current|latest)\b"
+    cleaned = re.sub(filler, "", crypto_name.lower())
+    cleaned = re.sub(r"[^\w\s-]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned and len(cleaned) >= 2:
+        result = _dexscreener_lookup(cleaned)
+        if result:
+            display, price, change, note = result
+            formatted = _format_price_change(price, change)
+            if formatted:
+                return f"{display}: {formatted}{note}"
 
     return None
 
@@ -2381,29 +2526,39 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # CRYPTO PRICE CHECK (Bypass LLM - return real data directly)
         # =========================
         crypto_keywords = ["price", "worth", "value", "cost", "how much", "market cap", "ath"]
-        # Word-boundary keyword match — this is the only gate now. The lookup itself
-        # will use CoinGecko's search API to resolve any ticker / name (including new
-        # coins that aren't in our hardcoded map).
         crypto_kw_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in crypto_keywords) + r")\b", re.IGNORECASE)
         looks_like_price_query = bool(crypto_kw_re.search(text_lower))
 
+        # Detect contract address — if user pastes one, ALWAYS try to look it up
+        # (contract addresses are unambiguous and DexScreener handles any chain).
+        ca_address, ca_kind = extract_contract_address(text)
+        has_contract = ca_address is not None
+
         crypto_price = None
-        if looks_like_price_query:
-            # Strip the bot's name and pass the rest to the price resolver
+        if looks_like_price_query or has_contract:
+            # Pass the full message; the resolver will decide between contract / ticker / name
             crypto_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
             crypto_price = await asyncio.to_thread(get_crypto_price, crypto_query)
 
-        # Pure price-only query — short message that's basically just "btc price" or
-        # "what is hype price?" — return CoinGecko data directly, bypass LLM.
-        # For broader questions ("hyperliquid coin price on cmc, what is it?") we let
-        # the LLM answer with the price injected as context.
-        if crypto_price and len(text.split()) <= 6:
-            cute_responses = [
-                f"{crypto_price}~ 💕",
-                f"Current price: {crypto_price} 📈",
-                f"It's at {crypto_price} right now~ ✨",
-                f"{crypto_price}, senpai~ 💙",
-            ]
+        # Pure price-only query — short message that's basically just "btc price",
+        # "what is hype price?", or just a contract address. Return data directly,
+        # bypass LLM. For broader questions we'll let the LLM weave in the price.
+        is_short = len(text.split()) <= 6
+        if crypto_price and (is_short or has_contract):
+            if has_contract:
+                # Contract address result already includes the token name + chain
+                cute_responses = [
+                    f"{crypto_price}~ 💕",
+                    f"{crypto_price} ✨",
+                    f"{crypto_price}, senpai~ 💙",
+                ]
+            else:
+                cute_responses = [
+                    f"{crypto_price}~ 💕",
+                    f"Current price: {crypto_price} 📈",
+                    f"It's at {crypto_price} right now~ ✨",
+                    f"{crypto_price}, senpai~ 💙",
+                ]
             reply = random.choice(cute_responses)
             add_to_history(chat_id, user_id, "assistant", reply)
             mark_user_replied(user_id)
@@ -2756,6 +2911,7 @@ async def diag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"• Groq client: {'✅' if groq_client else '❌'}")
     lines.append(f"• Cerebras key: {'✅ set' if CEREBRAS_API_KEY else '❌ MISSING'}")
     lines.append(f"• Cerebras client: {'✅' if cerebras_client else '❌'}")
+    lines.append(f"• CoinMarketCap key: {'✅ set (fallback)' if CMC_API_KEY else '○ not set (using DexScreener + CoinGecko only)'}")
     lines.append(f"• Supabase: {'✅' if supabase else '❌ (using JSON fallback)'}")
     lines.append(f"• Memory entries: {len(_anna_memory)}")
     lines.append(f"• Active history threads: {len(_conversation_history)}")
