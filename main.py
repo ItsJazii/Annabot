@@ -2291,12 +2291,30 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "latest", "news", "update on", "search for", "search ", "look up", "google ",
         "find out", "can you tell me", "do you know", "have you heard",
         "is it true", "is there", "current", "recent", "today",
+        # Crypto / market context — Anna should always check live data for these
+        " on cmc", " on coingecko", " on coinmarketcap", " price",
+        "market cap", "ath", "all time high", "trending", "stock",
+        # Real-time / news-y triggers
+        "happened", "released", "announced", "launched", "score", "won the", "winner of",
     ]
     stripped = text.rstrip()
     ends_with_question = stripped.endswith("?")
     has_keyword = any(kw in text_lower_for_search for kw in search_keywords)
     word_count = len(text.split())
-    needs_search = (has_keyword or ends_with_question) and word_count >= 2
+
+    # Also search if the message looks like a "name lookup" (e.g. just "hyperliquid"
+    # or "what about Solana" — the user is clearly asking Anna to look something up).
+    # Trigger when the cleaned text (mention removed) is short and looks topic-like.
+    cleaned_for_topic = re.sub(r"\banna\b", "", text_lower_for_search).strip(" ?.,!")
+    looks_like_topic_lookup = (
+        2 <= len(cleaned_for_topic.split()) <= 6
+        and not any(p in cleaned_for_topic for p in [
+            "love", "hate", "like", "miss you", "thanks", "hi ", "hello",
+            "good morning", "good night", "lol", "haha", "ok", "yes", "no",
+        ])
+    )
+
+    needs_search = (has_keyword or ends_with_question or looks_like_topic_lookup) and word_count >= 1
 
     # When Anna is answering a real question with web data, allow her a bit more room
     if needs_search:
@@ -2326,24 +2344,39 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Word-boundary match so "uni" doesn't fire on "university", "fil" doesn't hit "file", etc.
         crypto_kw_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in crypto_keywords) + r")\b", re.IGNORECASE)
         crypto_name_re = re.compile(r"\b(" + "|".join(re.escape(n) for n in crypto_names) + r")\b", re.IGNORECASE)
-        is_crypto_query = bool(crypto_kw_re.search(text_lower)) and bool(crypto_name_re.search(text_lower))
-        
+        has_crypto_keyword = bool(crypto_kw_re.search(text_lower))
+        has_crypto_name = bool(crypto_name_re.search(text_lower))
+        is_crypto_query = has_crypto_keyword and has_crypto_name
+
+        crypto_price = None
         if is_crypto_query:
-            # Get real price directly from CoinGecko
             crypto_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
             crypto_price = await asyncio.to_thread(get_crypto_price, crypto_query)
-            if crypto_price:
-                # Return directly with cute formatting - bypass LLM completely
-                cute_responses = [
-                    f"{crypto_price}~ 💕",
-                    f"Current price: {crypto_price} 📈",
-                    f"It's at {crypto_price} right now~ ✨",
-                    f"{crypto_price}, senpai~ 💙",
-                ]
-                reply = random.choice(cute_responses)
-                add_to_history(chat_id, user_id, "assistant", reply)
-                await update.message.reply_text(reply)
-                return
+
+        # Pure price-only query — short message that's basically just "btc price" or
+        # "what is hype price?" — return CoinGecko data directly, bypass LLM.
+        # For broader questions ("hyperliquid coin price on cmc, what is it?") we let
+        # the LLM answer with the price injected as context.
+        if crypto_price and len(text.split()) <= 6:
+            cute_responses = [
+                f"{crypto_price}~ 💕",
+                f"Current price: {crypto_price} 📈",
+                f"It's at {crypto_price} right now~ ✨",
+                f"{crypto_price}, senpai~ 💙",
+            ]
+            reply = random.choice(cute_responses)
+            add_to_history(chat_id, user_id, "assistant", reply)
+            mark_user_replied(user_id)
+            await update.message.reply_text(reply)
+            return
+
+        # If we have a price but it's a longer/contextual message, inject the price
+        # as fresh real-time data for the LLM to use in its answer.
+        if crypto_price:
+            full_system_prompt += (
+                f"\n\nLIVE DATA — current crypto price for the asset the user mentioned: {crypto_price}. "
+                f"Use this real number in your reply, don't make up a price."
+            )
         
         # =========================
         # GENERAL WEB SEARCH (Gemini Flash :online — same model, real-time grounded)
