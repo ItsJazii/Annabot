@@ -1497,9 +1497,11 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # CRYPTO PRICE API (CoinGecko - free, no API key needed)
 # =========================
 def get_crypto_price(crypto_name):
-    """Get real-time crypto price from CoinGecko API."""
+    """Get real-time crypto price from CoinGecko.
+    Strategy: try the local map first (fast, common coins), then fall back to
+    CoinGecko's /search API for anything else (handles new coins automatically)."""
     try:
-        # Map common names to CoinGecko IDs
+        # Map common names to CoinGecko IDs (fast path)
         crypto_map = {
             "bitcoin": "bitcoin",
             "btc": "bitcoin",
@@ -1544,7 +1546,6 @@ def get_crypto_price(crypto_name):
             "theta": "theta-token",
             "hype": "hyperliquid",
             "hyperliquid": "hyperliquid",
-            # Popular additions
             "shiba": "shiba-inu",
             "shib": "shiba-inu",
             "pepe": "pepe",
@@ -1567,8 +1568,6 @@ def get_crypto_price(crypto_name):
             "jupiter": "jupiter-exchange-solana",
             "fart": "fartcoin",
             "fartcoin": "fartcoin",
-            "mega": "megaeth",
-            "megaeth": "megaeth",
             "wld": "worldcoin-wld",
             "worldcoin": "worldcoin-wld",
             "render": "render-token",
@@ -1581,52 +1580,104 @@ def get_crypto_price(crypto_name):
             "kas": "kaspa",
             "kaspa": "kaspa",
         }
-        
-        # Find the crypto ID
-        crypto_id = None
+
         query_lower = crypto_name.lower()
-        for key, value in crypto_map.items():
-            if key in query_lower:
-                crypto_id = value
+        crypto_id = None
+        # Try longer keys first to avoid "sol" matching inside "console" etc.
+        # We already use word boundaries at the call site, but be safe here too.
+        for key in sorted(crypto_map.keys(), key=len, reverse=True):
+            if re.search(r"\b" + re.escape(key) + r"\b", query_lower):
+                crypto_id = crypto_map[key]
                 break
-        
+
+        # Fallback: use CoinGecko's search API to discover the id for any coin
+        # not in our hardcoded map (handles new launches automatically).
+        if not crypto_id:
+            # Strip filler words so "what's mega price" → "mega"
+            filler = (
+                r"\b(anna|what'?s|what is|what are|whats|whatsapp|tell me|"
+                r"price|worth|value|cost|how much|of|the|a|an|is|are|on|"
+                r"cmc|coingecko|coinmarketcap|coin|token|crypto|cryptocurrency|"
+                r"please|pls|now|today|current|latest)\b"
+            )
+            cleaned = re.sub(filler, "", query_lower)
+            cleaned = re.sub(r"[^\w\s-]", " ", cleaned)  # drop punctuation
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if not cleaned:
+                return None
+            try:
+                search_resp = requests.get(
+                    "https://api.coingecko.com/api/v3/search",
+                    params={"query": cleaned},
+                    timeout=5,
+                )
+                search_data = search_resp.json()
+                coins = search_data.get("coins", [])
+                if coins:
+                    # Selection priority:
+                    # 1. Exact symbol match for the cleaned query (so "MEGA" → MEGA token, not MegaUSD)
+                    # 2. Exact name match (case-insensitive)
+                    # 3. Highest-ranked coin with a market_cap_rank set
+                    # 4. First result
+                    cleaned_upper = cleaned.upper()
+                    cleaned_lower_strip = cleaned.lower().strip()
+                    pick = None
+                    for c in coins:
+                        if (c.get("symbol") or "").upper() == cleaned_upper:
+                            pick = c
+                            break
+                    if not pick:
+                        for c in coins:
+                            if (c.get("name") or "").lower() == cleaned_lower_strip:
+                                pick = c
+                                break
+                    if not pick:
+                        ranked = [c for c in coins if c.get("market_cap_rank")]
+                        pick = ranked[0] if ranked else coins[0]
+                    crypto_id = pick.get("id")
+                    logger.info(f"CoinGecko search resolved {cleaned!r} -> {crypto_id} (symbol={pick.get('symbol')})")
+            except Exception as e:
+                logger.warning(f"CoinGecko search fallback failed: {e}")
+
         if not crypto_id:
             return None
-        
-        # Call CoinGecko API
-        url = f"https://api.coingecko.com/api/v3/simple/price"
+
+        # Fetch price for the resolved id
+        url = "https://api.coingecko.com/api/v3/simple/price"
         params = {
             "ids": crypto_id,
             "vs_currencies": "usd",
-            "include_24hr_change": "true"
+            "include_24hr_change": "true",
         }
-        
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
-        
+
         if crypto_id in data:
             price = data[crypto_id]["usd"]
             change_24h = data[crypto_id].get("usd_24h_change", 0)
-            
-            # Format price
+
             if price >= 1000:
                 price_str = f"${price:,.2f}"
-            else:
+            elif price >= 1:
                 price_str = f"${price:.4f}"
-            
-            # Format change
+            else:
+                # Tiny prices need more decimals
+                price_str = f"${price:.8f}".rstrip("0").rstrip(".")
+                if not price_str.startswith("$"):
+                    price_str = "$" + price_str
+
             if change_24h > 0:
                 change_str = f"📈 +{change_24h:.2f}%"
             elif change_24h < 0:
                 change_str = f"📉 {change_24h:.2f}%"
             else:
                 change_str = "➡️ 0.00%"
-            
+
             return f"{price_str} {change_str} (24h)"
-        
+
     except Exception as e:
         logger.error(f"Crypto price fetch failed: {e}")
-    
+
     return None
 
 
@@ -2329,27 +2380,16 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # =========================
         # CRYPTO PRICE CHECK (Bypass LLM - return real data directly)
         # =========================
-        crypto_keywords = ["price", "worth", "value", "cost", "how much"]
-        crypto_names = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "cardano", "ada",
-                       "ripple", "xrp", "dogecoin", "doge", "polkadot", "dot", "litecoin", "ltc",
-                       "chainlink", "link", "uniswap", "uni", "polygon", "matic", "avalanche", "avax",
-                       "hype", "hyperliquid", "cosmos", "atom", "stellar", "xlm", "filecoin", "fil",
-                       "tron", "trx", "monero", "xmr", "tezos", "xtz", "algorand", "algo", "vechain", "vet",
-                       "shiba", "shib", "pepe", "wif", "bonk", "sui", "apt", "aptos", "near",
-                       "tia", "celestia", "arb", "arbitrum", "op", "optimism", "bnb",
-                       "ondo", "jup", "jupiter", "fart", "fartcoin", "mega", "megaeth",
-                       "wld", "worldcoin", "render", "rndr", "fet", "ena", "ethena",
-                       "tao", "bittensor", "kas", "kaspa"]
-
-        # Word-boundary match so "uni" doesn't fire on "university", "fil" doesn't hit "file", etc.
+        crypto_keywords = ["price", "worth", "value", "cost", "how much", "market cap", "ath"]
+        # Word-boundary keyword match — this is the only gate now. The lookup itself
+        # will use CoinGecko's search API to resolve any ticker / name (including new
+        # coins that aren't in our hardcoded map).
         crypto_kw_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in crypto_keywords) + r")\b", re.IGNORECASE)
-        crypto_name_re = re.compile(r"\b(" + "|".join(re.escape(n) for n in crypto_names) + r")\b", re.IGNORECASE)
-        has_crypto_keyword = bool(crypto_kw_re.search(text_lower))
-        has_crypto_name = bool(crypto_name_re.search(text_lower))
-        is_crypto_query = has_crypto_keyword and has_crypto_name
+        looks_like_price_query = bool(crypto_kw_re.search(text_lower))
 
         crypto_price = None
-        if is_crypto_query:
+        if looks_like_price_query:
+            # Strip the bot's name and pass the rest to the price resolver
             crypto_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
             crypto_price = await asyncio.to_thread(get_crypto_price, crypto_query)
 
