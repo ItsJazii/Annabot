@@ -241,7 +241,7 @@ if OPENROUTER_API_KEY:
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("OpenRouter AI (DeepSeek V4 Flash) connected as PRIMARY — 5s timeout, fast fail! ⚡")
+        logger.info("OpenRouter AI (Gemini 2.0 Flash) connected as PRIMARY — 5s timeout, fast fail! ⚡")
         
         # Perplexity Sonar for web search (built-in search capability)
         perplexity_client = OpenRouterClient(
@@ -2195,40 +2195,49 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_system_prompt = system_prompt + f"\n\nCurrent context: You are in a {chat_context}. {memory_context}"
 
     try:
-        search_context = ""
-        
         # =========================
-        # CRYPTO PRICE CHECK (Real-time data from CoinGecko)
+        # CRYPTO PRICE CHECK (Bypass LLM - return real data directly)
         # =========================
-        crypto_keywords = ["price", "worth", "value", "cost"]
+        crypto_keywords = ["price", "worth", "value", "cost", "how much"]
         crypto_names = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "cardano", "ada", 
                        "ripple", "xrp", "dogecoin", "doge", "polkadot", "dot", "litecoin", "ltc",
                        "chainlink", "link", "uniswap", "uni", "polygon", "matic", "avalanche", "avax",
-                       "hype", "hyperliquid"]
+                       "hype", "hyperliquid", "cosmos", "atom", "stellar", "xlm", "filecoin", "fil",
+                       "tron", "trx", "monero", "xmr", "tezos", "xtz", "algorand", "algo", "vechain", "vet"]
         
         is_crypto_query = any(kw in text_lower for kw in crypto_keywords) and any(crypto in text_lower for crypto in crypto_names)
         
         if is_crypto_query:
-            # Extract crypto name from query
+            # Get real price directly from CoinGecko
             crypto_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
             crypto_price = await asyncio.to_thread(get_crypto_price, crypto_query)
             if crypto_price:
-                search_context = f"\n\n(Real-time data: The current price is {crypto_price}. Answer with this exact price.)"
+                # Return directly with cute formatting - bypass LLM completely
+                cute_responses = [
+                    f"{crypto_price}~ 💕",
+                    f"Current price: {crypto_price} 📈",
+                    f"It's at {crypto_price} right now~ ✨",
+                    f"{crypto_price}, senpai~ 💙",
+                ]
+                reply = random.choice(cute_responses)
+                add_to_history(chat_id, user_id, "assistant", reply)
+                await update.message.reply_text(reply)
+                return
         
         # =========================
         # GENERAL WEB SEARCH (Perplexity Sonar)
         # =========================
-        if not search_context:  # Only search if not already handled by crypto
-            question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
-            needs_search = any(indicator in text_lower for indicator in question_indicators)
+        search_context = ""
+        question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
+        needs_search = any(indicator in text_lower for indicator in question_indicators)
 
-            if needs_search and perplexity_client:
-                # Extract the actual question (remove "anna" from the query)
-                search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
-                if len(search_query) > 3:
-                    search_results = await asyncio.to_thread(web_search, search_query)
-                    if search_results:
-                        search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
+        if needs_search and perplexity_client:
+            # Extract the actual question (remove "anna" from the query)
+            search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
+            if len(search_query) > 3:
+                search_results = await asyncio.to_thread(web_search, search_query)
+                if search_results:
+                    search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
 
         # Build message history for multi-turn conversation
         history = get_history(chat_id, user_id)
@@ -2256,13 +2265,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="deepseek/deepseek-v4-flash",  # DeepSeek V4 Flash - fast, cheap, good quality
+                        model="google/gemini-2.0-flash-001",  # Gemini Flash - fast, cheap, follows instructions
                         messages=messages,
                         max_tokens=80,
                         temperature=0.9
                     )
                 )
-                used_provider = "openrouter-deepseek"
+                used_provider = "openrouter-gemini"
             except Exception as or_err:
                 logger.warning(f"OpenRouter failed: {or_err}")
 
