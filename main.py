@@ -39,8 +39,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -226,12 +224,12 @@ if CEREBRAS_API_KEY:
         logger.error(f"Cerebras setup failed: {e}")
 
 openrouter_client = None
-perplexity_client = None
+openrouter_search_client = None
 if OPENROUTER_API_KEY:
     try:
         from openai import OpenAI as OpenRouterClient
         import httpx
-        # Custom transport with 5-second timeout for fast fail
+        # Custom transport with 5-second timeout for fast fail (normal chat)
         transport = httpx.HTTPTransport(retries=1)
         http_client = httpx.Client(transport=transport, timeout=5.0)
         openrouter_client = OpenRouterClient(
@@ -239,17 +237,15 @@ if OPENROUTER_API_KEY:
             base_url="https://openrouter.ai/api/v1",
             http_client=http_client
         )
-        if not gemini_model:
-            gemini_model = True
-        logger.info("OpenRouter AI (Gemini 2.0 Flash) connected as PRIMARY — 5s timeout, fast fail! ⚡")
-        
-        # Perplexity Sonar for web search (built-in search capability)
-        perplexity_client = OpenRouterClient(
+        # Separate client with longer timeout for :online search calls (search adds latency)
+        openrouter_search_client = OpenRouterClient(
             api_key=OPENROUTER_API_KEY,
             base_url="https://openrouter.ai/api/v1",
-            http_client=httpx.Client(transport=httpx.HTTPTransport(retries=1), timeout=8.0)
+            http_client=httpx.Client(transport=httpx.HTTPTransport(retries=1), timeout=15.0)
         )
-        logger.info("Perplexity Sonar (web search) connected! 🔍")
+        if not gemini_model:
+            gemini_model = True
+        logger.info("OpenRouter AI (Gemini 2.0 Flash) connected as PRIMARY — 5s chat / 15s search timeout ⚡🔍")
     except Exception as e:
         logger.error(f"OpenRouter setup failed: {e}")
 
@@ -1641,8 +1637,6 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # CRYPTO PRICE API (CoinGecko - free, no API key needed)
 # =========================
-import requests
-
 def get_crypto_price(crypto_name):
     """Get real-time crypto price from CoinGecko API."""
     try:
@@ -1688,7 +1682,6 @@ def get_crypto_price(crypto_name):
             "algo": "algorand",
             "vechain": "vechain",
             "vet": "vechain",
-            "theta": "theta-token",
             "theta": "theta-token",
             "hype": "hyperliquid",
             "hyperliquid": "hyperliquid",
@@ -1743,30 +1736,11 @@ def get_crypto_price(crypto_name):
 
 
 # =========================
-# WEB SEARCH (Perplexity Sonar via OpenRouter)
+# WEB SEARCH (now handled inline via Gemini :online — see anna_chat)
 # =========================
-def web_search(query):
-    """Search the web using Perplexity Sonar (built-in search capability)."""
-    if not perplexity_client:
-        return None
-    
-    try:
-        response = perplexity_client.chat.completions.create(
-            model="perplexity/sonar",
-            messages=[
-                {"role": "system", "content": "You are a helpful search assistant. Search the web and provide concise, factual answers. Include relevant details and sources when possible."},
-                {"role": "user", "content": query}
-            ],
-            max_tokens=200,
-            temperature=0.3
-        )
-        
-        if response.choices:
-            return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Perplexity search failed: {e}")
-    
-    return None
+# Web search is performed by appending ":online" to the Gemini Flash model slug.
+# OpenRouter's web plugin runs Exa search and grounds the response automatically,
+# so no separate search call is needed. Keeps Anna's voice intact in one round trip.
 
 
 # =========================
@@ -2194,6 +2168,34 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cheap models need memory in the system prompt, not bracketed in the user message
     full_system_prompt = system_prompt + f"\n\nCurrent context: You are in a {chat_context}. {memory_context}"
 
+    # Detect search-worthy questions early so we can adjust the prompt + model call
+    text_lower_for_search = text.lower()
+    search_keywords = [
+        "what is", "what's", "what are", "who is", "who's", "who are",
+        "how to", "how do", "how does", "how much", "how many",
+        "when did", "when is", "when was", "when will",
+        "where is", "where do", "where can", "where are",
+        "why is", "why do", "why does",
+        "tell me about", "explain", "define", "meaning of",
+        "latest", "news", "update on", "search for", "search ", "look up", "google ",
+        "find out", "can you tell me", "do you know", "have you heard",
+        "is it true", "is there", "current", "recent", "today",
+    ]
+    stripped = text.rstrip()
+    ends_with_question = stripped.endswith("?")
+    has_keyword = any(kw in text_lower_for_search for kw in search_keywords)
+    word_count = len(text.split())
+    needs_search = (has_keyword or ends_with_question) and word_count >= 2
+
+    # When Anna is answering a real question with web data, allow her a bit more room
+    if needs_search:
+        full_system_prompt += (
+            "\n\nIMPORTANT: The user just asked a real question. You have live web search results. "
+            "Answer factually and accurately using the info — but stay in your cute Anna voice. "
+            "You may go up to 3 sentences (~300 chars) for this answer ONLY. Drop a cute emoji at the end. "
+            "Do NOT add asterisk actions. Do NOT cite URLs in markdown — just give the facts naturally."
+        )
+
     try:
         # =========================
         # CRYPTO PRICE CHECK (Bypass LLM - return real data directly)
@@ -2225,19 +2227,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         
         # =========================
-        # GENERAL WEB SEARCH (Perplexity Sonar)
+        # GENERAL WEB SEARCH (Gemini Flash :online — same model, real-time grounded)
         # =========================
-        search_context = ""
-        question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
-        needs_search = any(indicator in text_lower for indicator in question_indicators)
-
-        if needs_search and perplexity_client:
-            # Extract the actual question (remove "anna" from the query)
-            search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
-            if len(search_query) > 3:
-                search_results = await asyncio.to_thread(web_search, search_query)
-                if search_results:
-                    search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
+        # `needs_search` was computed above (before the prompt was finalized) so the
+        # system prompt could be adjusted for factual answers. Below we just route
+        # the request to Gemini :online when a search is needed — same model both
+        # searches and replies in Anna's voice in a single round trip.
 
         # Build message history for multi-turn conversation
         history = get_history(chat_id, user_id)
@@ -2249,29 +2244,43 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages.append(msg)
 
         # Add current user message — just the text, no brackets or tags
-        current_msg = text + search_context
-        messages.append({"role": "user", "content": current_msg})
+        messages.append({"role": "user", "content": text})
 
         # Save user message to history (clean version without context tags)
         add_to_history(chat_id, user_id, "user", text)
 
         # Provider priority: OpenRouter (paid, fast, reliable) → Groq (free) → Cerebras (free)
-        # This ensures Anna replies ASAP instead of waiting for free rate limits
+        # When a search is needed, use Gemini :online so the same model grounds its
+        # answer with live web results in a single call.
         response = None
         used_provider = None
 
         # Try OpenRouter FIRST (paid = fast + reliable)
         if openrouter_client:
             try:
-                response = await asyncio.to_thread(
-                    lambda: openrouter_client.chat.completions.create(
-                        model="google/gemini-2.0-flash-001",  # Gemini Flash - fast, cheap, follows instructions
-                        messages=messages,
-                        max_tokens=80,
-                        temperature=0.9
+                if needs_search and openrouter_search_client:
+                    # Search-grounded call: longer timeout, more tokens, :online suffix
+                    logger.info(f"Anna :online search for: {text[:60]}")
+                    response = await asyncio.to_thread(
+                        lambda: openrouter_search_client.chat.completions.create(
+                            model="google/gemini-2.0-flash-001:online",
+                            messages=messages,
+                            max_tokens=180,
+                            temperature=0.8,
+                            extra_body={"plugins": [{"id": "web", "max_results": 3}]}
+                        )
                     )
-                )
-                used_provider = "openrouter-gemini"
+                    used_provider = "openrouter-gemini-online"
+                else:
+                    response = await asyncio.to_thread(
+                        lambda: openrouter_client.chat.completions.create(
+                            model="google/gemini-2.0-flash-001",
+                            messages=messages,
+                            max_tokens=80,
+                            temperature=0.9
+                        )
+                    )
+                    used_provider = "openrouter-gemini"
             except Exception as or_err:
                 logger.warning(f"OpenRouter failed: {or_err}")
 
@@ -2282,7 +2291,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=messages,
-                        max_tokens=80,
+                        max_tokens=180 if needs_search else 80,
                         temperature=0.9
                     )
                 )
@@ -2300,7 +2309,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: cerebras_client.chat.completions.create(
                         model="llama3.1-8b",
                         messages=messages,
-                        max_tokens=80,
+                        max_tokens=180 if needs_search else 80,
                         temperature=0.9
                     )
                 )
@@ -2309,7 +2318,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Cerebras also failed: {cerebras_err}")
 
         if response and response.choices:
-            reply = response.choices[0].message.content.strip()[:200]
+            # Search answers can be a bit longer; chitchat stays tight at 200
+            char_cap = 500 if needs_search else 200
+            reply = response.choices[0].message.content.strip()[:char_cap]
             if reply:
                 # Save Anna's reply to conversation history
                 add_to_history(chat_id, user_id, "assistant", reply)
