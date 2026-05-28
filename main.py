@@ -722,6 +722,7 @@ async def setup_commands(application):
         BotCommand("status", "Check bot status"),
         BotCommand("tldr", "TLDR of the last 6 hours"),
         BotCommand("vibe", "One-line vibe check on the chat"),
+        BotCommand("diag", "Owner: live provider diagnostic"),
         BotCommand("tldrdebug", "Owner: debug TLDR buffer (owner only)"),
         BotCommand("goon", "Send a random sticker"),
         BotCommand("shutup", "Owner: silence Anna for everyone except you"),
@@ -2667,6 +2668,49 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(reply)
 
 
+async def diag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/diag — owner-only quick diagnostic of which providers are wired up and reachable."""
+    track_user(update.effective_user)
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Mou~ this is for my master only 💙")
+        return
+
+    lines = ["🔧 Anna diagnostic:"]
+    lines.append(f"• OpenRouter key: {'✅ set' if OPENROUTER_API_KEY else '❌ MISSING'}")
+    lines.append(f"• OpenRouter client: {'✅' if openrouter_client else '❌'}")
+    lines.append(f"• OpenRouter search client: {'✅' if openrouter_search_client else '❌'}")
+    lines.append(f"• Groq key: {'✅ set' if GROQ_API_KEY else '❌ MISSING'}")
+    lines.append(f"• Groq client: {'✅' if groq_client else '❌'}")
+    lines.append(f"• Cerebras key: {'✅ set' if CEREBRAS_API_KEY else '❌ MISSING'}")
+    lines.append(f"• Cerebras client: {'✅' if cerebras_client else '❌'}")
+    lines.append(f"• Supabase: {'✅' if supabase else '❌ (using JSON fallback)'}")
+    lines.append(f"• Memory entries: {len(_anna_memory)}")
+    lines.append(f"• Active history threads: {len(_conversation_history)}")
+    lines.append(f"• Global silence: {'🔇 ON' if is_global_silence() else '✨ off'}")
+    lines.append("")
+    lines.append("Testing OpenRouter live...")
+    await update.message.reply_text("\n".join(lines))
+
+    # Live ping OpenRouter to confirm key actually works
+    if openrouter_client:
+        try:
+            test = await asyncio.to_thread(
+                lambda: openrouter_client.chat.completions.create(
+                    model="google/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "say hi in 3 words"}],
+                    max_tokens=20,
+                )
+            )
+            if test.choices:
+                await update.message.reply_text(f"✅ OpenRouter live: {test.choices[0].message.content[:80]}")
+            else:
+                await update.message.reply_text("⚠️ OpenRouter returned no choices")
+        except Exception as e:
+            await update.message.reply_text(f"❌ OpenRouter live failed:\n{type(e).__name__}: {str(e)[:300]}")
+    else:
+        await update.message.reply_text("❌ OpenRouter client is None — check key is set in Render env")
+
+
 async def vibe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/vibe — one-line read on the recent chat energy."""
     track_user(update.effective_user)
@@ -2762,6 +2806,7 @@ def run_bot():
             application.add_handler(CommandHandler("memory", memory_command))
             application.add_handler(CommandHandler("forget", forget_command))
             application.add_handler(CommandHandler("vibe", vibe_command))
+            application.add_handler(CommandHandler("diag", diag_command))
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
