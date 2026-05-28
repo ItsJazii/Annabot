@@ -156,6 +156,7 @@ ADMINS_DB = "admins_db.json"
 STICKERS_DB = "stickers.json"
 MEMORY_DB = "memory_db.json"
 HISTORY_DB = "history_db.json"
+LEARNED_DB = "learned_db.json"
 
 
 def load_json(path, default):
@@ -730,6 +731,9 @@ async def setup_commands(application):
         BotCommand("speak", "Owner: let Anna talk to everyone again"),
         BotCommand("memory", "Owner: view what Anna remembers about a user (reply)"),
         BotCommand("forget", "Owner: make Anna forget a user (reply)"),
+        BotCommand("learn", "Owner: teach Anna a fact (/learn topic | fact)"),
+        BotCommand("unlearn", "Owner: forget a learned fact (/unlearn topic)"),
+        BotCommand("learned", "Owner: list learned facts"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1307,6 +1311,106 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Forgotten everything about {target_name}, master~ ✨ It's like they never existed to me.")
     else:
         await update.message.reply_text(f"I already don't remember {target_name}, master~ 💫")
+
+
+# =========================
+# LEARNED FACTS COMMANDS (Owner only)
+# =========================
+async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command: manually teach Anna a fact.
+    Usage: /learn topic | the fact text
+    Example: /learn megaeth chain | MegaETH is a real-time L2 with sub-millisecond blocks."""
+    track_user(update.effective_user)
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Mou~ only my master can teach me things 💙")
+        return
+
+    raw = " ".join(context.args) if context.args else ""
+    if "|" not in raw:
+        await update.message.reply_text(
+            "Tell me like this~\n"
+            "/learn <topic> | <fact>\n\n"
+            "example: /learn pepe coin | PEPE is a memecoin on Ethereum, not a real frog 💕"
+        )
+        return
+
+    topic, fact = raw.split("|", 1)
+    topic = topic.strip()
+    fact = fact.strip()
+    if not topic or not fact:
+        await update.message.reply_text("Need both a topic and a fact, master~ 🥺")
+        return
+
+    if add_learned_fact(topic, fact, source="manual"):
+        await update.message.reply_text(f"Got it, master~ 📝 I'll remember:\n*{topic}* → {fact[:200]}")
+    else:
+        await update.message.reply_text("Couldn't save that one, gomen~ try a shorter topic? 😢")
+
+
+async def unlearn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command: forget a learned fact by topic.
+    Usage: /unlearn topic"""
+    track_user(update.effective_user)
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Mou~ only my master can erase what I've learned 💙")
+        return
+
+    topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        await update.message.reply_text("Tell me which topic to forget~ /unlearn <topic>")
+        return
+
+    if forget_learned(topic):
+        await update.message.reply_text(f"Forgotten about *{topic}*, master~ ✨")
+    else:
+        await update.message.reply_text(f"I don't have anything saved for *{topic}*, master~ 💫")
+
+
+async def learned_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command: list what Anna has learned. Optional search arg."""
+    track_user(update.effective_user)
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("Mou~ this is for my master only 💙")
+        return
+
+    if not _learned_facts:
+        await update.message.reply_text("I haven't learned anything yet, master~ 📚")
+        return
+
+    query = " ".join(context.args).strip().lower() if context.args else ""
+    items = list(_learned_facts.items())
+    if query:
+        items = [
+            (k, e) for k, e in items
+            if query in k or query in e.get("topic", "").lower() or query in e.get("fact", "").lower()
+        ]
+        if not items:
+            await update.message.reply_text(f"Nothing learned matching '{query}', master~ 💫")
+            return
+
+    # Sort by hits desc, then most recent
+    items.sort(key=lambda kv: (kv[1].get("hits", 0), kv[1].get("learned_at", "")), reverse=True)
+
+    # Telegram has a 4096 char limit per message; trim and chunk if needed
+    lines = [f"📚 Anna's learned facts ({len(items)} total):", ""]
+    for key, entry in items[:40]:
+        topic = entry.get("topic", key)
+        fact = entry.get("fact", "")[:200]
+        hits = entry.get("hits", 0)
+        src = entry.get("source", "?")
+        src_emoji = {"manual": "👑", "user_correction": "✏️", "web_search": "🌐"}.get(src, "•")
+        lines.append(f"{src_emoji} *{topic}* (hits: {hits})")
+        lines.append(f"   {fact}")
+        lines.append("")
+
+    if len(items) > 40:
+        lines.append(f"...and {len(items) - 40} more. Use /learned <query> to filter.")
+
+    text = "\n".join(lines)
+    # Stay under Telegram's 4096 char cap
+    if len(text) > 3900:
+        text = text[:3900] + "\n…(truncated, use /learned <query> to filter)"
+    await update.message.reply_text(text)
 
 
 # =========================
@@ -2094,6 +2198,196 @@ def mark_user_replied(user_id):
     _user_last_reply[str(user_id)] = time.time()
 
 
+# =========================
+# LEARNED FACTS (Anna's growing knowledge base)
+# =========================
+# Structure: {
+#   "topic_key (lowercased)": {
+#     "topic": "original topic string",
+#     "fact": "the corrected/learned info",
+#     "source": "user_correction" | "web_search" | "manual",
+#     "learned_at": iso timestamp,
+#     "hits": int (how many times this fact has been used)
+#   }
+# }
+# Persisted to learned_db.json. Capped at MAX_LEARNED entries (oldest least-used pruned).
+_learned_facts = load_json(LEARNED_DB, {})
+MAX_LEARNED = 500
+LEARNED_FACT_MAX_LEN = 400
+
+
+def _save_learned():
+    save_json(LEARNED_DB, _learned_facts)
+
+
+def _normalize_topic(topic):
+    """Lowercase and strip a topic to a stable key. Removes filler and punctuation."""
+    t = topic.lower().strip()
+    t = re.sub(r"[^\w\s-]", " ", t)
+    t = re.sub(r"\b(the|a|an|is|are|was|were|of|in|on|to|for|about|anna)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:80]
+
+
+def add_learned_fact(topic, fact, source="user_correction"):
+    """Save a learned fact. Idempotent — same topic key updates in place."""
+    if not topic or not fact:
+        return False
+    key = _normalize_topic(topic)
+    if not key:
+        return False
+    fact = fact.strip()[:LEARNED_FACT_MAX_LEN]
+    _learned_facts[key] = {
+        "topic": topic.strip()[:120],
+        "fact": fact,
+        "source": source,
+        "learned_at": datetime.now(timezone.utc).isoformat(),
+        "hits": _learned_facts.get(key, {}).get("hits", 0),
+    }
+    # Prune if we're over the cap — drop the least-recently-used entries
+    if len(_learned_facts) > MAX_LEARNED:
+        sorted_items = sorted(
+            _learned_facts.items(),
+            key=lambda kv: (kv[1].get("hits", 0), kv[1].get("learned_at", "")),
+        )
+        for old_key, _ in sorted_items[: len(_learned_facts) - MAX_LEARNED]:
+            _learned_facts.pop(old_key, None)
+    _save_learned()
+    return True
+
+
+def forget_learned(topic):
+    """Remove a learned fact by topic. Returns True if removed."""
+    key = _normalize_topic(topic)
+    if key in _learned_facts:
+        _learned_facts.pop(key)
+        _save_learned()
+        return True
+    return False
+
+
+def find_relevant_learned(text, max_results=3):
+    """Return up to N (topic, fact) tuples whose topic keywords appear in `text`.
+    Bumps hit counter for matched entries so popular facts get retained."""
+    if not _learned_facts:
+        return []
+    text_lower = text.lower()
+    matches = []
+    for key, entry in _learned_facts.items():
+        # match if any non-trivial word of the topic key appears in the text
+        words = [w for w in key.split() if len(w) >= 3]
+        if not words:
+            continue
+        if any(re.search(r"\b" + re.escape(w) + r"\b", text_lower) for w in words):
+            matches.append((key, entry))
+
+    if not matches:
+        return []
+
+    # Sort by hits desc, then most recently learned
+    matches.sort(key=lambda kv: (kv[1].get("hits", 0), kv[1].get("learned_at", "")), reverse=True)
+    chosen = matches[:max_results]
+    # Bump hit counters for what we used
+    for key, entry in chosen:
+        _learned_facts[key]["hits"] = entry.get("hits", 0) + 1
+    _save_learned()
+    return [(e["topic"], e["fact"]) for _, e in chosen]
+
+
+# Detect "no, actually..." / "wrong, it's..." style corrections
+_CORRECTION_PATTERNS = [
+    r"\b(no|nope|nah|wrong|incorrect|actually|you'?re wrong|that'?s wrong|that'?s incorrect)\b",
+    r"\bit'?s actually\b",
+    r"\bnot.*it'?s\b",
+    r"\bcorrection\b",
+    r"\bfor your info\b",
+    r"\bfyi\b",
+]
+_CORRECTION_RE = re.compile("|".join(_CORRECTION_PATTERNS), re.IGNORECASE)
+
+
+def looks_like_correction(text):
+    """Heuristic: does this user message look like they're correcting Anna?"""
+    return bool(_CORRECTION_RE.search(text))
+
+
+async def extract_learning_from_correction(user_text, anna_previous_reply):
+    """Use a tiny LLM call to extract (topic, fact) from a user correction.
+    Returns (topic, fact) or (None, None) if extraction fails."""
+    if not openrouter_client or not anna_previous_reply:
+        return None, None
+    extract_prompt = (
+        "You are a tiny extractor. The user is correcting a chatbot. From the conversation below, "
+        "extract ONE short factual correction in this exact JSON shape:\n"
+        '{"topic": "<2-6 word topic>", "fact": "<the corrected fact in one short sentence>"}\n\n'
+        "If there's no clear correction, respond with: {}\n"
+        "Do not include any other text. Just JSON.\n\n"
+        f"Anna said: {anna_previous_reply[:300]}\n"
+        f"User replied: {user_text[:300]}\n\n"
+        "JSON:"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            lambda: openrouter_client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": extract_prompt}],
+                max_tokens=120,
+                temperature=0.1,
+            )
+        )
+        if not resp.choices:
+            return None, None
+        raw = resp.choices[0].message.content.strip()
+        # Strip code fences if the model wrapped them
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        data = json.loads(raw)
+        topic = (data.get("topic") or "").strip()
+        fact = (data.get("fact") or "").strip()
+        if topic and fact and len(topic) <= 80 and len(fact) <= LEARNED_FACT_MAX_LEN:
+            return topic, fact
+    except Exception as e:
+        logger.debug(f"Correction extraction failed: {e}")
+    return None, None
+
+
+async def extract_learning_from_search(user_question, anna_answer):
+    """Snapshot a (topic, fact) tuple from a web-search answer Anna just gave.
+    Different from corrections — here Anna learns from what *she* just said
+    (which was grounded in live web search) so the next time the topic comes up
+    she has a cached fact."""
+    if not openrouter_client or not anna_answer or len(anna_answer) < 30:
+        return None, None
+    extract_prompt = (
+        "Extract ONE concise topic + fact from the chatbot's answer below in this exact JSON shape:\n"
+        '{"topic": "<2-6 word topic>", "fact": "<the key fact in one short sentence>"}\n'
+        "Respond with {} if there's no factual claim. Just JSON, no other text.\n\n"
+        f"User asked: {user_question[:200]}\n"
+        f"Bot answered: {anna_answer[:400]}\n\n"
+        "JSON:"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            lambda: openrouter_client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": extract_prompt}],
+                max_tokens=120,
+                temperature=0.1,
+            )
+        )
+        if not resp.choices:
+            return None, None
+        raw = resp.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        data = json.loads(raw)
+        topic = (data.get("topic") or "").strip()
+        fact = (data.get("fact") or "").strip()
+        if topic and fact and len(topic) <= 80 and len(fact) <= LEARNED_FACT_MAX_LEN:
+            return topic, fact
+    except Exception as e:
+        logger.debug(f"Search snapshot extraction failed: {e}")
+    return None, None
+
+
 def _save_history_if_due():
     """Persist history to disk at most every HISTORY_SAVE_INTERVAL seconds (write coalescing)."""
     now = time.time()
@@ -2475,6 +2769,15 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "of what's being discussed):\n" + "\n".join(ctx_lines)
             )
 
+    # Inject any learned facts that match the current message
+    learned_hits = find_relevant_learned(text)
+    if learned_hits:
+        facts_block = "\n".join(f"- {topic}: {fact}" for topic, fact in learned_hits)
+        full_system_prompt += (
+            "\n\nThings I've learned over time (use these if relevant — don't contradict them, "
+            "they came from corrections or fact-checked answers):\n" + facts_block
+        )
+
     # Detect search-worthy questions early so we can adjust the prompt + model call
     text_lower_for_search = text.lower()
     search_keywords = [
@@ -2693,6 +2996,37 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_to_history(chat_id, user_id, "assistant", reply)
                 mark_user_replied(user_id)
                 await update.message.reply_text(reply)
+
+                # Background learning — fire-and-forget, doesn't block the user.
+                async def _post_learn():
+                    try:
+                        # 1. If this was a fact-checked search answer, snapshot it.
+                        if needs_search:
+                            topic, fact = await extract_learning_from_search(text, reply)
+                            if topic and fact:
+                                add_learned_fact(topic, fact, source="web_search")
+                                logger.info(f"Learned (search): {topic} -> {fact[:80]}")
+
+                        # 2. If the user's message looked like a correction of Anna's
+                        #    previous reply, extract the corrected fact.
+                        if looks_like_correction(text):
+                            recent = get_history(chat_id, user_id)
+                            # last assistant reply BEFORE this one
+                            prev_anna = None
+                            # Walk backwards skipping the just-added user/assistant pair
+                            for h in reversed(recent[:-2] if len(recent) >= 2 else []):
+                                if h.get("role") == "assistant":
+                                    prev_anna = h.get("content")
+                                    break
+                            if prev_anna:
+                                topic, fact = await extract_learning_from_correction(text, prev_anna)
+                                if topic and fact:
+                                    add_learned_fact(topic, fact, source="user_correction")
+                                    logger.info(f"Learned (correction from {user_name}): {topic} -> {fact[:80]}")
+                    except Exception as e:
+                        logger.debug(f"Background learning failed: {e}")
+
+                asyncio.create_task(_post_learn())
         elif not response:
             # All providers failed — log the trail so we can see why on Render
             logger.error(f"All providers failed for user {user_id} in chat {chat_id} (search={needs_search}): {text[:100]}")
@@ -2914,6 +3248,7 @@ async def diag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"• CoinMarketCap key: {'✅ set (fallback)' if CMC_API_KEY else '○ not set (using DexScreener + CoinGecko only)'}")
     lines.append(f"• Supabase: {'✅' if supabase else '❌ (using JSON fallback)'}")
     lines.append(f"• Memory entries: {len(_anna_memory)}")
+    lines.append(f"• Learned facts: {len(_learned_facts)}")
     lines.append(f"• Active history threads: {len(_conversation_history)}")
     lines.append(f"• Global silence: {'🔇 ON' if is_global_silence() else '✨ off'}")
     lines.append("")
@@ -3034,6 +3369,9 @@ def run_bot():
             application.add_handler(CommandHandler("speak", speak_command))
             application.add_handler(CommandHandler("memory", memory_command))
             application.add_handler(CommandHandler("forget", forget_command))
+            application.add_handler(CommandHandler("learn", learn_command))
+            application.add_handler(CommandHandler("unlearn", unlearn_command))
+            application.add_handler(CommandHandler("learned", learned_command))
             application.add_handler(CommandHandler("vibe", vibe_command))
             application.add_handler(CommandHandler("diag", diag_command))
 
