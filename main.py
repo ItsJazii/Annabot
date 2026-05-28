@@ -241,7 +241,7 @@ if OPENROUTER_API_KEY:
         )
         if not gemini_model:
             gemini_model = True
-        logger.info("OpenRouter AI (Llama 3.1 8B) connected as PRIMARY — 5s timeout, fast fail! ⚡")
+        logger.info("OpenRouter AI (DeepSeek V4 Flash) connected as PRIMARY — 5s timeout, fast fail! ⚡")
         
         # Perplexity Sonar for web search (built-in search capability)
         perplexity_client = OpenRouterClient(
@@ -1639,6 +1639,110 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# CRYPTO PRICE API (CoinGecko - free, no API key needed)
+# =========================
+import requests
+
+def get_crypto_price(crypto_name):
+    """Get real-time crypto price from CoinGecko API."""
+    try:
+        # Map common names to CoinGecko IDs
+        crypto_map = {
+            "bitcoin": "bitcoin",
+            "btc": "bitcoin",
+            "ethereum": "ethereum",
+            "eth": "ethereum",
+            "solana": "solana",
+            "sol": "solana",
+            "cardano": "cardano",
+            "ada": "cardano",
+            "ripple": "ripple",
+            "xrp": "ripple",
+            "polkadot": "polkadot",
+            "dot": "polkadot",
+            "dogecoin": "dogecoin",
+            "doge": "dogecoin",
+            "polygon": "matic-network",
+            "matic": "matic-network",
+            "avalanche": "avalanche-2",
+            "avax": "avalanche-2",
+            "chainlink": "chainlink",
+            "link": "chainlink",
+            "litecoin": "litecoin",
+            "ltc": "litecoin",
+            "uniswap": "uniswap",
+            "uni": "uniswap",
+            "cosmos": "cosmos",
+            "atom": "cosmos",
+            "stellar": "stellar",
+            "xlm": "stellar",
+            "filecoin": "filecoin",
+            "fil": "filecoin",
+            "tron": "tron",
+            "trx": "tron",
+            "monero": "monero",
+            "xmr": "monero",
+            "tezos": "tezos",
+            "xtz": "tezos",
+            "algorand": "algorand",
+            "algo": "algorand",
+            "vechain": "vechain",
+            "vet": "vechain",
+            "theta": "theta-token",
+            "theta": "theta-token",
+            "hype": "hyperliquid",
+            "hyperliquid": "hyperliquid",
+        }
+        
+        # Find the crypto ID
+        crypto_id = None
+        query_lower = crypto_name.lower()
+        for key, value in crypto_map.items():
+            if key in query_lower:
+                crypto_id = value
+                break
+        
+        if not crypto_id:
+            return None
+        
+        # Call CoinGecko API
+        url = f"https://api.coingecko.com/api/v3/simple/price"
+        params = {
+            "ids": crypto_id,
+            "vs_currencies": "usd",
+            "include_24hr_change": "true"
+        }
+        
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        
+        if crypto_id in data:
+            price = data[crypto_id]["usd"]
+            change_24h = data[crypto_id].get("usd_24h_change", 0)
+            
+            # Format price
+            if price >= 1000:
+                price_str = f"${price:,.2f}"
+            else:
+                price_str = f"${price:.4f}"
+            
+            # Format change
+            if change_24h > 0:
+                change_str = f"📈 +{change_24h:.2f}%"
+            elif change_24h < 0:
+                change_str = f"📉 {change_24h:.2f}%"
+            else:
+                change_str = "➡️ 0.00%"
+            
+            return f"{price_str} {change_str} (24h)"
+        
+    except Exception as e:
+        logger.error(f"Crypto price fetch failed: {e}")
+    
+    return None
+
+
+# =========================
 # WEB SEARCH (Perplexity Sonar via OpenRouter)
 # =========================
 def web_search(query):
@@ -2091,18 +2195,40 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_system_prompt = system_prompt + f"\n\nCurrent context: You are in a {chat_context}. {memory_context}"
 
     try:
-        # Check if the message looks like a question that needs web search
-        question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
-        needs_search = any(indicator in text_lower for indicator in question_indicators)
-
         search_context = ""
-        if needs_search and perplexity_client:
-            # Extract the actual question (remove "anna" from the query)
-            search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
-            if len(search_query) > 3:
-                search_results = await asyncio.to_thread(web_search, search_query)
-                if search_results:
-                    search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
+        
+        # =========================
+        # CRYPTO PRICE CHECK (Real-time data from CoinGecko)
+        # =========================
+        crypto_keywords = ["price", "worth", "value", "cost"]
+        crypto_names = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "cardano", "ada", 
+                       "ripple", "xrp", "dogecoin", "doge", "polkadot", "dot", "litecoin", "ltc",
+                       "chainlink", "link", "uniswap", "uni", "polygon", "matic", "avalanche", "avax",
+                       "hype", "hyperliquid"]
+        
+        is_crypto_query = any(kw in text_lower for kw in crypto_keywords) and any(crypto in text_lower for crypto in crypto_names)
+        
+        if is_crypto_query:
+            # Extract crypto name from query
+            crypto_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
+            crypto_price = await asyncio.to_thread(get_crypto_price, crypto_query)
+            if crypto_price:
+                search_context = f"\n\n(Real-time data: The current price is {crypto_price}. Answer with this exact price.)"
+        
+        # =========================
+        # GENERAL WEB SEARCH (Perplexity Sonar)
+        # =========================
+        if not search_context:  # Only search if not already handled by crypto
+            question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
+            needs_search = any(indicator in text_lower for indicator in question_indicators)
+
+            if needs_search and perplexity_client:
+                # Extract the actual question (remove "anna" from the query)
+                search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
+                if len(search_query) > 3:
+                    search_results = await asyncio.to_thread(web_search, search_query)
+                    if search_results:
+                        search_context = f"\n\n(For your info — web search results for '{search_query}': {search_results}\nUse these to answer accurately, but respond in Anna's cute style. Keep it short.)"
 
         # Build message history for multi-turn conversation
         history = get_history(chat_id, user_id)
@@ -2130,13 +2256,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="meta-llama/llama-3.1-8b-instruct",  # Cheapest viable model for $2/month budget
+                        model="deepseek/deepseek-v4-flash",  # DeepSeek V4 Flash - fast, cheap, good quality
                         messages=messages,
                         max_tokens=80,
                         temperature=0.9
                     )
                 )
-                used_provider = "openrouter-haiku"
+                used_provider = "openrouter-deepseek"
             except Exception as or_err:
                 logger.warning(f"OpenRouter failed: {or_err}")
 
