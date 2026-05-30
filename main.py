@@ -2629,27 +2629,20 @@ def _git(*args):
         return ""
 
 
-def format_update_reply(n=5):
-    """Build Anna's recap of her latest git push + recent commits. None if git unavailable."""
-    latest = _git("log", "-1", "--pretty=format:%h|%cr|%s|%b")
-    if not latest:
-        return None
-    parts = latest.split("|", 3)
-    if len(parts) < 3:
-        return None
-    h, when, subject = parts[0], parts[1], parts[2]
-    body = parts[3].strip() if len(parts) > 3 else ""
-    msg = f"Heyy~ here's my latest update ✨ ({when})\n\n🌸 {subject}"
-    if body:
-        msg += f"\n{body}"
-    recent = _git("log", "-n", str(n), "--pretty=format:%cr|%s")
-    older = []
-    for line in recent.splitlines()[1:]:  # skip latest, already shown
-        p = line.split("|", 1)
-        if len(p) == 2:
-            older.append(f"• {p[1]} ({p[0]})")
-    if older:
-        msg += "\n\nBefore that~\n" + "\n".join(older)
+ANNA_CHANGELOG = [
+    "I can actually *remember* you now~ our convos, your vibe, and how you like to be treated 💕",
+    "I recall things from past chats, even across different groups — just ask me 'remember when…' ✨",
+    "Tons of stuff works by just talking to me now, no commands — translating, vibe checks, tldrs~",
+    "New little tricks: /reset to start fresh and /retry if you want me to say it differently 🌸",
+    "Ask me 'who do you remember?' and I'll tell you for real now (no more making up names hehe 😳)",
+]
+
+
+def format_update_reply():
+    """Anna's friendly recap of what changed recently, phrased in her own voice."""
+    when = _git("log", "-1", "--pretty=format:%cr") or "recently"
+    msg = f"Uwaa~ I got updated {when}! ✨ Here's what's new with me~\n\n"
+    msg += "\n".join(f"🌸 {line}" for line in ANNA_CHANGELOG)
     return msg
 
 
