@@ -3088,9 +3088,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
 
-    # Select the appropriate system prompt
-    # Owner ALWAYS gets owner rules, even in groups. Master is master everywhere.
-    if is_owner_chat:
+    # Owner gets devoted "master" treatment ONLY in private DMs.
+    # In groups, Anna treats the owner like everyone else.
+    if is_owner_chat and is_private:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
@@ -3098,6 +3098,22 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build the full system prompt with memory injected
     # Cheap models need memory in the system prompt, not bracketed in the user message
     full_system_prompt = system_prompt + f"\n\nCurrent context: You are in a {chat_context}. {memory_context}"
+
+    # Reply-awareness: if the user is replying to a specific message, tell Anna what
+    # that message said and who wrote it, so she answers in that exact context.
+    rt = update.message.reply_to_message
+    rt_text = rt.text or rt.caption if rt else None
+    if rt and rt_text:
+        if rt.from_user and rt.from_user.id == context.bot.id:
+            rt_author = "Anna (her own earlier message)"
+        elif rt.from_user:
+            rt_author = rt.from_user.first_name or rt.from_user.username or "someone"
+        else:
+            rt_author = "someone"
+        full_system_prompt += (
+            f"\n\nThe user is replying to this earlier message from {rt_author}: "
+            f"\"{rt_text[:300]}\". Read it and respond in the context of what they're replying to."
+        )
 
     # Group context awareness — feed Anna the last few messages from the chat
     # so she understands what people were discussing, not just the one mention.
