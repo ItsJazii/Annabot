@@ -641,6 +641,16 @@ def get_memory_context(user_id, user_name):
     elif score <= -1:
         memory_parts.append(f"{known_name} seemed a bit off last time. {opinion}")
 
+    # Long-term rolling summary of everything we've talked about before
+    summary = entry.get("summary", "")
+    if summary:
+        memory_parts.append(f"What I remember from our past conversations with {known_name}: {summary}")
+
+    # Self-improving model: how this person likes to be treated
+    prefs = entry.get("preferences", "")
+    if prefs:
+        memory_parts.append(f"How {known_name} likes me to treat them (learned from how they interact with me): {prefs}")
+
     return " ".join(memory_parts)
 
 
@@ -724,6 +734,8 @@ async def setup_commands(application):
         BotCommand("status", "Check bot status"),
         BotCommand("tldr", "TLDR of the last 6 hours"),
         BotCommand("vibe", "One-line vibe check on the chat"),
+        BotCommand("reset", "Start a fresh conversation (keeps long-term memory)"),
+        BotCommand("retry", "Regenerate my last reply"),
         BotCommand("diag", "Owner: live provider diagnostic"),
         BotCommand("tldrdebug", "Owner: debug TLDR buffer (owner only)"),
         BotCommand("goon", "Send a random sticker"),
@@ -786,7 +798,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /memory (reply) - See what I remember about someone\n"
         "  /forget (reply) - Make me forget someone\n\n"
         "🎀 Fun:\n"
-        "  /goon - Random sticker hehe~"
+        "  /goon - Random sticker hehe~\n\n"
+        "💫 Chat control:\n"
+        "  /reset - Fresh convo (I still remember you~)\n"
+        "  /retry - Redo my last reply"
     )
     await update.message.reply_text(text)
 
@@ -1284,6 +1299,14 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"  {i}. {fact}\n"
     else:
         text += "\n📌 No facts stored yet.\n"
+
+    summary = entry.get("summary", "")
+    if summary:
+        text += f"\n🧩 Long-term profile:\n{summary}\n"
+
+    prefs = entry.get("preferences", "")
+    if prefs:
+        text += f"\n🎯 How they like to be treated:\n{prefs}\n"
 
     await update.message.reply_text(text)
 
@@ -2178,7 +2201,7 @@ _rate_limit_notified_ref = [False]  # whether we already told the user
 # Session conversation memory: {key: [{"role": "user"/"assistant", "content": "..."}]}
 # Persisted to history_db.json so Anna remembers conversations across restarts.
 _conversation_history = load_json(HISTORY_DB, {})
-MAX_HISTORY = 15  # Keep last 15 messages per user per chat
+MAX_HISTORY = 40  # Keep last 40 messages per user per chat (older ones roll into the long-term summary)
 _history_dirty = [False]  # write coalescing flag
 _history_last_save = [0.0]
 HISTORY_SAVE_INTERVAL = 30.0  # seconds
@@ -2416,6 +2439,231 @@ def add_to_history(chat_id, user_id, role, content):
         _conversation_history[key] = _conversation_history[key][-(MAX_HISTORY * 2):]
     _history_dirty[0] = True
     _save_history_if_due()
+
+
+# =========================
+# LONG-TERM MEMORY SUMMARY (rolling)
+# =========================
+# Every SUMMARY_EVERY messages, Anna condenses the recent conversation (plus her
+# previous summary) into one persistent paragraph stored in _anna_memory[uid].
+# This lets her "remember everything" without keeping every raw message forever.
+SUMMARY_EVERY = 20
+SUMMARY_MAX_LEN = 1500
+REFLECT_EVERY = 60  # deeper consolidation + preference-learning pass
+
+
+async def maybe_update_summary(chat_id, user_id, user_name):
+    """Refresh a user's long-term memory summary roughly every SUMMARY_EVERY messages."""
+    uid = str(user_id)
+    entry = _anna_memory.get(uid)
+    if not entry or not openrouter_client:
+        return
+    count = entry.get("conversation_count", 0)
+    if count == 0 or count % SUMMARY_EVERY != 0 or count % REFLECT_EVERY == 0:
+        return
+
+    history = get_history(chat_id, user_id)
+    if not history:
+        return
+
+    convo = "\n".join(
+        f"{'Anna' if m.get('role') == 'assistant' else user_name}: {m.get('content', '')}"
+        for m in history[-(MAX_HISTORY * 2):]
+    )
+    prev = entry.get("summary", "")
+    prompt = (
+        "You are maintaining Anna's long-term memory of a person she chats with. "
+        "Merge the PREVIOUS MEMORY with the RECENT CONVERSATION into one updated memory. "
+        "Keep durable facts about the person (name, age, location, likes/dislikes, job, "
+        "relationships, ongoing topics, important events) and the general vibe of how they "
+        "treat Anna. Drop small talk. Write it as concise notes in third person, under 150 words.\n\n"
+        f"PERSON: {user_name}\n\n"
+        f"PREVIOUS MEMORY:\n{prev or '(none yet)'}\n\n"
+        f"RECENT CONVERSATION:\n{convo}\n\n"
+        "UPDATED MEMORY:"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            lambda: openrouter_client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.2,
+            )
+        )
+        if resp.choices:
+            new_summary = resp.choices[0].message.content.strip()
+            if new_summary:
+                entry["summary"] = new_summary[:SUMMARY_MAX_LEN]
+                _anna_memory[uid] = entry
+                _save_memory()
+                logger.info(f"Updated long-term memory for {user_name} ({uid})")
+    except Exception as e:
+        logger.debug(f"Summary update failed: {e}")
+
+
+async def maybe_reflect(chat_id, user_id, user_name):
+    """Deeper consolidation pass (every REFLECT_EVERY messages): Anna reviews everything
+    she knows about a person and rewrites a clean, de-duplicated profile PLUS an
+    interaction-preferences guide — how she should treat them (self-improving model)."""
+    uid = str(user_id)
+    entry = _anna_memory.get(uid)
+    if not entry or not openrouter_client:
+        return
+    count = entry.get("conversation_count", 0)
+    if count == 0 or count % REFLECT_EVERY != 0:
+        return
+
+    history = get_history(chat_id, user_id)
+    convo = "\n".join(
+        f"{'Anna' if m.get('role') == 'assistant' else user_name}: {m.get('content', '')}"
+        for m in history[-(MAX_HISTORY * 2):]
+    )
+    prompt = (
+        "You are Anna's reflection process. Review everything she knows about a person and "
+        "consolidate it. De-duplicate, drop the trivial, keep what matters. Return ONLY JSON:\n"
+        '{"profile": "<who they are: durable facts, life, ongoing topics, and the vibe of how '
+        'they treat Anna; third person; under 150 words>", '
+        '"preferences": "<how Anna should treat them going forward: preferred name/nickname, '
+        'tone they respond best to, topics to lean into, topics or boundaries to avoid; under 80 words>"}\n\n'
+        f"PERSON: {user_name}\n"
+        f"CURRENT PROFILE NOTES: {entry.get('summary', '(none)')}\n"
+        f"KNOWN FACTS: {'; '.join(entry.get('facts', [])) or '(none)'}\n"
+        f"ANNA'S OPINION: {entry.get('opinion', '(neutral)')}\n"
+        f"RECENT CONVERSATION:\n{convo or '(none)'}\n\n"
+        "JSON:"
+    )
+    try:
+        resp = await asyncio.to_thread(
+            lambda: openrouter_client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.2,
+            )
+        )
+        if not resp.choices:
+            return
+        raw = resp.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        data = json.loads(raw)
+        profile = (data.get("profile") or "").strip()
+        prefs = (data.get("preferences") or "").strip()
+        if profile:
+            entry["summary"] = profile[:SUMMARY_MAX_LEN]
+        if prefs:
+            entry["preferences"] = prefs[:600]
+        _anna_memory[uid] = entry
+        _save_memory()
+        logger.info(f"Reflected on {user_name} ({uid})")
+    except Exception as e:
+        logger.debug(f"Reflection failed: {e}")
+
+
+# =========================
+# CROSS-SESSION RECALL (search Anna's own past conversations)
+# =========================
+# Detects when the user references the past, then keyword-searches ALL of that
+# user's stored conversations (every chat she's seen them in) and injects the most
+# relevant old lines — so she can recall specifics even from other chats.
+_RECALL_RE = re.compile(
+    r"\b(remember|recall|you said|i told you|did i (tell|say|mention)|what did (we|i)|"
+    r"last time|back when|the other day|earlier|previously|we talked about|i mentioned)\b",
+    re.IGNORECASE,
+)
+_RECALL_STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "do", "does", "did", "you", "me", "my",
+    "your", "we", "it", "to", "of", "in", "on", "and", "or", "but", "that", "this", "what",
+    "when", "where", "who", "why", "how", "with", "about", "for", "have", "has", "had",
+    "anna", "remember", "recall", "said", "told", "tell", "mention", "time", "talked",
+}
+
+
+def search_user_history(user_id, query, max_results=3):
+    """Keyword search across ALL of a user's stored conversations (every chat).
+    Returns up to N (role, content) pairs most relevant to the query."""
+    words = [
+        w for w in re.findall(r"[a-z0-9']+", query.lower())
+        if len(w) >= 4 and w not in _RECALL_STOPWORDS
+    ]
+    if not words:
+        return []
+    suffix = f"_{user_id}"
+    scored = []
+    for key, msgs in _conversation_history.items():
+        if not key.endswith(suffix):
+            continue
+        for m in msgs:
+            content = m.get("content", "")
+            if not content:
+                continue
+            score = sum(1 for w in words if w in content.lower())
+            if score:
+                scored.append((score, m.get("role"), content))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out, seen = [], set()
+    for _, role, content in scored:
+        if content in seen:
+            continue
+        seen.add(content)
+        out.append((role, content))
+        if len(out) >= max_results:
+            break
+    return out
+
+
+# =========================
+# COMMAND: /reset (new conversation) and /retry (regenerate last reply)
+# =========================
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clear the active conversation window — long-term memory/summary is kept."""
+    track_user(update.effective_user)
+    key = get_conversation_key(update.effective_chat.id, update.effective_user.id)
+    _conversation_history.pop(key, None)
+    save_json(HISTORY_DB, _conversation_history)
+    _history_dirty[0] = False
+    _history_last_save[0] = time.time()
+    await update.message.reply_text(
+        "Okay~ fresh start! I cleared our recent chat 💫 (I still remember you though, don't worry~ 🥰)"
+    )
+
+
+async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Regenerate Anna's last reply to the user's most recent message."""
+    track_user(update.effective_user)
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    if not openrouter_client:
+        await update.message.reply_text("Mou~ I can't redo that right now 🥺")
+        return
+    key = get_conversation_key(chat_id, user_id)
+    hist = _conversation_history.get(key, [])
+    if hist and hist[-1].get("role") == "assistant":
+        hist.pop()  # drop the reply we're redoing
+    last_user = next((m["content"] for m in reversed(hist) if m.get("role") == "user"), None)
+    if not last_user:
+        await update.message.reply_text("Mou~ there's nothing for me to redo yet 🥺")
+        return
+    user_name = update.effective_user.username or update.effective_user.first_name or "friend"
+    base = ANNA_BASE_PROMPT + (ANNA_OWNER_RULES if is_owner(user_id) else ANNA_SFW_RULES)
+    full = base + f"\n\n{get_memory_context(user_id, user_name)}"
+    messages = [{"role": "system", "content": full}] + hist[-(MAX_HISTORY * 2):]
+    try:
+        resp = await asyncio.to_thread(
+            lambda: openrouter_client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=messages, max_tokens=200, temperature=1.0,
+            )
+        )
+        reply = resp.choices[0].message.content.strip()[:300] if resp.choices else ""
+    except Exception as e:
+        logger.debug(f"Retry failed: {e}")
+        reply = ""
+    if not reply:
+        await update.message.reply_text("Eep~ my brain glitched, try again? 😅")
+        return
+    add_to_history(chat_id, user_id, "assistant", reply)
+    await update.message.reply_text(reply)
 
 # =========================
 # GROUP MESSAGE BUFFER (for TLDR)
@@ -2687,6 +2935,25 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📋 TLDR for {chat_title}~\n\n{summary}")
         return
 
+    # Natural language TRANSLATE trigger — reply to a message and ask her to translate it
+    translate_phrases = [
+        "translate", "translation", "what does this say", "what does this mean",
+        "what's this say", "whats this say", "what is this saying", "in english",
+    ]
+    if (update.message.reply_to_message and update.message.reply_to_message.text
+            and any(p in text_lower for p in translate_phrases)):
+        await translate_command(update, context)
+        return
+
+    # Natural language VIBE trigger
+    vibe_phrases = [
+        "vibe check", "what's the vibe", "whats the vibe", "the vibe rn",
+        "how's the vibe", "hows the vibe", "read the vibe", "vibe rn",
+    ]
+    if not is_private and any(p in text_lower for p in vibe_phrases):
+        await vibe_command(update, context)
+        return
+
     # Quick reaction shortcut: if the message is short chitchat ("lol", "ty", etc.),
     # send an emoji reaction instead of generating a full reply. Saves tokens and
     # feels way more like a real person.
@@ -2777,6 +3044,17 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "\n\nThings I've learned over time (use these if relevant — don't contradict them, "
             "they came from corrections or fact-checked answers):\n" + facts_block
         )
+
+    # Cross-session recall — if the user references the past, search ALL their chats
+    if _RECALL_RE.search(text):
+        recent_contents = {m.get("content", "") for m in get_history(chat_id, user_id)[-(MAX_HISTORY * 2):]}
+        recalled = [(r, c) for r, c in search_user_history(user_id, text) if c not in recent_contents]
+        if recalled:
+            lines = [f"- {'I said' if r == 'assistant' else 'they said'}: {c[:200]}" for r, c in recalled]
+            full_system_prompt += (
+                "\n\nRelevant things from our past conversations (recall these accurately, "
+                "don't make them up):\n" + "\n".join(lines)
+            )
 
     # Detect search-worthy questions early so we can adjust the prompt + model call
     text_lower_for_search = text.lower()
@@ -3025,6 +3303,11 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     logger.info(f"Learned (correction from {user_name}): {topic} -> {fact[:80]}")
                     except Exception as e:
                         logger.debug(f"Background learning failed: {e}")
+
+                    # 3. Refresh Anna's long-term memory of this user (every ~20 msgs)
+                    await maybe_update_summary(chat_id, user_id, user_name)
+                    # 4. Deeper reflection: consolidate profile + learn how to treat them (every ~60 msgs)
+                    await maybe_reflect(chat_id, user_id, user_name)
 
                 asyncio.create_task(_post_learn())
         elif not response:
@@ -3374,6 +3657,8 @@ def run_bot():
             application.add_handler(CommandHandler("learned", learned_command))
             application.add_handler(CommandHandler("vibe", vibe_command))
             application.add_handler(CommandHandler("diag", diag_command))
+            application.add_handler(CommandHandler("reset", reset_command))
+            application.add_handler(CommandHandler("retry", retry_command))
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
