@@ -6,6 +6,7 @@ import random
 import re
 import time
 import threading
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 from deep_translator import GoogleTranslator
@@ -1465,9 +1466,6 @@ async def goon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     random_sticker = random.choice(db.stickers)
     try:
-        cute_captions = ["here u go hehe~ 💫", "catch~ ✨", "uwaa look at this~ 🌸", "for you, bestie~ 💙", "goon time~ ✨", "hehe~ 🎀"]
-        caption = random.choice(cute_captions)
-        await update.message.reply_text(caption)
         await update.message.reply_sticker(random_sticker)
     except Exception as e:
         logger.error(f"Failed to send sticker: {e}")
@@ -2613,6 +2611,49 @@ def search_user_history(user_id, query, max_results=3):
 
 
 # =========================
+# SELF-UPDATE AWARENESS ("what's your last update?")
+# =========================
+# Reads Anna's own git history at runtime so she can tell people what changed in
+# her latest push and recent updates — like Hermes.
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _git(*args):
+    try:
+        out = subprocess.run(
+            ["git", *args], capture_output=True, text=True, timeout=5, cwd=_REPO_DIR
+        )
+        return out.stdout.strip()
+    except Exception as e:
+        logger.debug(f"git {args} failed: {e}")
+        return ""
+
+
+def format_update_reply(n=5):
+    """Build Anna's recap of her latest git push + recent commits. None if git unavailable."""
+    latest = _git("log", "-1", "--pretty=format:%h|%cr|%s|%b")
+    if not latest:
+        return None
+    parts = latest.split("|", 3)
+    if len(parts) < 3:
+        return None
+    h, when, subject = parts[0], parts[1], parts[2]
+    body = parts[3].strip() if len(parts) > 3 else ""
+    msg = f"Heyy~ here's my latest update ✨ ({when})\n\n🌸 {subject}"
+    if body:
+        msg += f"\n{body}"
+    recent = _git("log", "-n", str(n), "--pretty=format:%cr|%s")
+    older = []
+    for line in recent.splitlines()[1:]:  # skip latest, already shown
+        p = line.split("|", 1)
+        if len(p) == 2:
+            older.append(f"• {p[1]} ({p[0]})")
+    if older:
+        msg += "\n\nBefore that~\n" + "\n".join(older)
+    return msg
+
+
+# =========================
 # COMMAND: /reset (new conversation) and /retry (regenerate last reply)
 # =========================
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2952,6 +2993,18 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if not is_private and any(p in text_lower for p in vibe_phrases):
         await vibe_command(update, context)
+        return
+
+    # Natural language "what's your last update / what's new" — recap the latest git push
+    update_phrases = [
+        "last update", "latest update", "your last update", "recent update",
+        "what did you update", "what have you updated", "last push", "latest push",
+        "your last push", "changelog", "new feature", "what's new", "whats new",
+        "what changed", "what's changed", "whats changed", "what u updated",
+    ]
+    if any(p in text_lower for p in update_phrases):
+        recap = format_update_reply()
+        await update.message.reply_text(recap or "Hmm~ I can't peek at my update history right now 😅")
         return
 
     # Quick reaction shortcut: if the message is short chitchat ("lol", "ty", etc.),
