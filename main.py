@@ -2653,6 +2653,26 @@ def format_update_reply(n=5):
     return msg
 
 
+def format_known_people(limit=40):
+    """List the real people in Anna's memory (so she doesn't hallucinate names)."""
+    if not _anna_memory:
+        return "Hmm~ I don't really remember anyone yet, master 🥺"
+    owner_id = get_owner_id()
+    names = []
+    for uid, e in _anna_memory.items():
+        nm = e.get("preferred_name") or e.get("first_name") or "someone"
+        if owner_id and str(uid) == str(owner_id):
+            nm = f"you ({nm}, my master 💕)"
+        names.append(nm)
+    total = len(names)
+    listed = ", ".join(names[:limit])
+    word = "person" if total == 1 else "people"
+    msg = f"I remember {total} {word}~ ✨\n{listed}"
+    if total > limit:
+        msg += f" …and {total - limit} more~"
+    return msg
+
+
 # =========================
 # COMMAND: /reset (new conversation) and /retry (regenerate last reply)
 # =========================
@@ -3006,6 +3026,17 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         recap = format_update_reply()
         await update.message.reply_text(recap or "Hmm~ I can't peek at my update history right now 😅")
         return
+
+    # Owner asks who Anna remembers — answer from REAL memory, don't let her hallucinate
+    if is_owner_chat:
+        remember_phrases = [
+            "who do you remember", "whom do you remember", "which users", "who all do you remember",
+            "who's in your memory", "whos in your memory", "people you remember", "who do you know",
+            "list of people", "everyone you remember",
+        ]
+        if any(p in text_lower for p in remember_phrases):
+            await update.message.reply_text(format_known_people())
+            return
 
     # Quick reaction shortcut: if the message is short chitchat ("lol", "ty", etc.),
     # send an emoji reaction instead of generating a full reply. Saves tokens and
