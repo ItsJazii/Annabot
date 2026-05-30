@@ -3201,7 +3201,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # =========================
         crypto_keywords = ["price", "worth", "value", "cost", "how much", "market cap", "ath"]
         crypto_kw_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in crypto_keywords) + r")\b", re.IGNORECASE)
-        looks_like_price_query = bool(crypto_kw_re.search(text_lower))
+        # "how much longer", "how long" etc. are time questions, not price queries
+        duration_phrases = ["how much longer", "how much long", "how long", "how much more time"]
+        looks_like_price_query = bool(crypto_kw_re.search(text_lower)) and not any(d in text_lower for d in duration_phrases)
 
         # Detect contract address — if user pastes one, ALWAYS try to look it up
         # (contract addresses are unambiguous and DexScreener handles any chain).
