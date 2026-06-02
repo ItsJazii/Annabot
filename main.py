@@ -41,6 +41,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 CMC_API_KEY = os.getenv("CMC_API_KEY")  # Optional CoinMarketCap key
 
 if not BOT_TOKEN:
@@ -2026,7 +2027,7 @@ TLDR:"""
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model="google/gemini-2.0-flash-001",
+                    model=OPENROUTER_MODEL,
                     messages=[{"role": "user", "content": tldr_prompt}],
                     max_tokens=200,
                     temperature=0.8
@@ -2350,7 +2351,7 @@ async def extract_learning_from_correction(user_text, anna_previous_reply):
     try:
         resp = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=[{"role": "user", "content": extract_prompt}],
                 max_tokens=120,
                 temperature=0.1,
@@ -2389,7 +2390,7 @@ async def extract_learning_from_search(user_question, anna_answer):
     try:
         resp = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=[{"role": "user", "content": extract_prompt}],
                 max_tokens=120,
                 temperature=0.1,
@@ -2483,7 +2484,7 @@ async def maybe_update_summary(chat_id, user_id, user_name):
     try:
         resp = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 temperature=0.2,
@@ -2534,7 +2535,7 @@ async def maybe_reflect(chat_id, user_id, user_name):
     try:
         resp = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=400,
                 temperature=0.2,
@@ -2705,7 +2706,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         resp = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=messages, max_tokens=200, temperature=1.0,
             )
         )
@@ -2819,7 +2820,7 @@ async def anna_describe_image(image_url, user_caption, system_prompt, history):
     try:
         response = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=OPENROUTER_MODEL,
                 messages=messages,
                 max_tokens=120,
                 temperature=0.9,
@@ -3293,7 +3294,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Anna web-search for: {text[:60]}")
                     response = await asyncio.to_thread(
                         lambda: openrouter_search_client.chat.completions.create(
-                            model="google/gemini-2.0-flash-001",
+                            model=OPENROUTER_MODEL,
                             messages=messages,
                             max_tokens=180,
                             temperature=0.8,
@@ -3303,7 +3304,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     response = await asyncio.to_thread(
                         lambda: openrouter_client.chat.completions.create(
-                            model="google/gemini-2.0-flash-001",
+                            model=OPENROUTER_MODEL,
                             messages=messages,
                             max_tokens=80,
                             temperature=0.9
@@ -3320,7 +3321,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info("Search call failed, retrying without web plugin")
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="google/gemini-2.0-flash-001",
+                        model=OPENROUTER_MODEL,
                         messages=messages,
                         max_tokens=120,
                         temperature=0.9
@@ -3591,7 +3592,7 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model="google/gemini-2.0-flash-001",
+                    model=OPENROUTER_MODEL,
                     messages=messages,
                     max_tokens=80,
                     temperature=0.9,
@@ -3638,7 +3639,7 @@ async def diag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             test = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model="google/gemini-2.0-flash-001",
+                    model=OPENROUTER_MODEL,
                     messages=[{"role": "user", "content": "say hi in 3 words"}],
                     max_tokens=20,
                 )
@@ -3694,7 +3695,7 @@ async def vibe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model="google/gemini-2.0-flash-001",
+                    model=OPENROUTER_MODEL,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=40,
                     temperature=0.9,

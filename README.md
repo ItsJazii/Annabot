@@ -66,6 +66,7 @@ Handler order in PTB:
 |-----|----------|-------------|
 | `BOT_TOKEN` | Yes | From [@BotFather](https://t.me/BotFather) |
 | `OPENROUTER_API_KEY` | Yes | From [openrouter.ai](https://openrouter.ai) — used for chat, search, vision |
+| `OPENROUTER_MODEL` | Optional | OpenRouter model slug. Defaults to `google/gemini-2.5-flash` |
 | `GROQ_API_KEY` | Yes | From [console.groq.com](https://console.groq.com) — fallback chat + voice transcription |
 | `CEREBRAS_API_KEY` | Yes | From [cloud.cerebras.ai](https://cloud.cerebras.ai) — fallback chat |
 | `BOT_OWNER_ID` | Yes | Your Telegram user ID |
