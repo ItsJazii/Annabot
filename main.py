@@ -3223,7 +3223,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_owner_chat and is_private:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
     elif is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
+        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
+        system_prompt = ANNA_INVINCIBLE_RULES
+        logger.info(f"INVINCIBLE MODE active for user {user_id} in chat {chat_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
 
@@ -3630,7 +3632,9 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
     elif is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
+        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
+        system_prompt = ANNA_INVINCIBLE_RULES
+        logger.info(f"INVINCIBLE VISION MODE for user {user_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
@@ -3713,7 +3717,9 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
     elif is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
+        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
+        system_prompt = ANNA_INVINCIBLE_RULES
+        logger.info(f"INVINCIBLE VOICE MODE for user {user_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
