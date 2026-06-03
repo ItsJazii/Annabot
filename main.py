@@ -42,7 +42,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
-INVINCIBLE_MODEL = os.getenv("INVINCIBLE_MODEL", "deepseek/deepseek-chat")  # Less-filtered model for invincible users
 CMC_API_KEY = os.getenv("CMC_API_KEY")  # Optional CoinMarketCap key
 
 if not BOT_TOKEN:
@@ -59,7 +58,7 @@ translator = GoogleTranslator(source="auto", target="en")
 # ANNA AI PERSONALITY
 # =========================
 # Prompts live in prompts.py to keep main.py focused on bot logic.
-from prompts import ANNA_BASE_PROMPT, ANNA_SFW_RULES, ANNA_OWNER_RULES, ANNA_INVINCIBLE_RULES
+from prompts import ANNA_BASE_PROMPT, ANNA_SFW_RULES, ANNA_OWNER_RULES
 
 gemini_model = None
 groq_client = None
@@ -160,7 +159,6 @@ STICKERS_DB = "stickers.json"
 MEMORY_DB = "memory_db.json"
 HISTORY_DB = "history_db.json"
 LEARNED_DB = "learned_db.json"
-INVINCIBLE_DB = "invincible_db.json"
 
 
 def load_json(path, default):
@@ -294,47 +292,6 @@ _anna_memory = load_json(MEMORY_DB, {})
 
 def _save_memory():
     save_json(MEMORY_DB, _anna_memory)
-
-
-# =========================
-# INVINCIBLE USERS (full unrestricted access — owner + designated IDs)
-# =========================
-_invincible_raw = load_json(INVINCIBLE_DB, {"invincible_users": []})
-_invincible_users = set(str(u) for u in _invincible_raw.get("invincible_users", []))
-
-
-def _save_invincible():
-    save_json(INVINCIBLE_DB, {"invincible_users": sorted(list(_invincible_users))})
-
-
-def is_invincible(user_id):
-    """Return True if user is owner or explicitly on the invincible list. Works in every chat."""
-    if is_owner(user_id):
-        return True
-    return str(user_id) in _invincible_users
-
-
-def add_invincible(user_id):
-    _invincible_users.add(str(user_id))
-    _save_invincible()
-
-
-def remove_invincible(user_id):
-    uid = str(user_id)
-    if uid in _invincible_users:
-        _invincible_users.discard(uid)
-        _save_invincible()
-        return True
-    return False
-
-
-def list_invincible():
-    return sorted(list(_invincible_users))
-
-
-def get_model_for_user(user_id):
-    """Return the OpenRouter model slug to use for this user."""
-    return INVINCIBLE_MODEL if is_invincible(user_id) else OPENROUTER_MODEL
 
 
 # Explicit word severity levels
@@ -791,7 +748,6 @@ async def setup_commands(application):
         BotCommand("learn", "Owner: teach Anna a fact (/learn topic | fact)"),
         BotCommand("unlearn", "Owner: forget a learned fact (/unlearn topic)"),
         BotCommand("learned", "Owner: list learned facts"),
-        BotCommand("invincible", "Owner: manage invincible users (full access)"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1252,87 +1208,6 @@ async def listadmins_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text += "No admins configured."
 
     await update.message.reply_text(text)
-
-
-# =========================
-# INVINCIBLE COMMANDS (Owner only)
-# =========================
-async def invincible_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner command: manage invincible users.
-    /invincible — list invincible users
-    /invincible <user_id> — add user
-    /invincible remove <user_id> — remove user
-    Reply to a message with /invincible to add that user.
-    """
-    track_user(update.effective_user)
-    user_id = update.effective_user.id
-
-    if not is_owner(user_id):
-        await update.message.reply_text("Mou~ only my master controls invincible mode 💙")
-        return
-
-    args = context.args or []
-    reply = update.message.reply_to_message
-
-    # List mode: no args and no reply
-    if not args and not reply:
-        inv_list = list_invincible()
-        if inv_list:
-            text = (
-                "👑 Invincible users (full unrestricted access):\n"
-                + "\n".join(f"  • {uid}" for uid in inv_list)
-            )
-        else:
-            text = "No invincible users yet, master~ 💫 Only you have full access."
-        text += "\n\nUse:\n  /invincible <user_id> — add\n  /invincible remove <user_id> — remove\n  Reply to a message + /invincible — add that user"
-        await update.message.reply_text(text)
-        return
-
-    # Resolve target user_id
-    target_id = None
-    if reply:
-        target_id = reply.from_user.id
-        # Cannot remove owner via reply (parse action from args if provided)
-        action = args[0].lower() if args else "add"
-    elif args:
-        action = args[0].lower()
-        if action in ("remove", "delete", "del", "rm"):
-            if len(args) < 2:
-                await update.message.reply_text("Tell me who to remove~ /invincible remove <user_id> 💫")
-                return
-            target_id = args[1]
-        else:
-            target_id = args[0]
-    else:
-        await update.message.reply_text("Hmm? I didn't catch who you mean, master~ 💫")
-        return
-
-    # Normalize target_id
-    try:
-        target_id = int(target_id)
-    except (ValueError, TypeError):
-        await update.message.reply_text("That doesn't look like a valid user ID, master~ 🥺")
-        return
-
-    # Owner cannot be removed
-    if is_owner(target_id) and action in ("remove", "delete", "del", "rm"):
-        await update.message.reply_text("You are my master — I can't remove your invincible status 💕")
-        return
-
-    if action in ("remove", "delete", "del", "rm"):
-        if remove_invincible(target_id):
-            await update.message.reply_text(f"Removed {target_id} from invincible mode, master~ 💫")
-        else:
-            await update.message.reply_text(f"{target_id} wasn't on the invincible list, master~ 💤")
-    else:
-        if is_invincible(target_id):
-            await update.message.reply_text(f"{target_id} is already invincible, master~ ✨")
-        else:
-            add_invincible(target_id)
-            await update.message.reply_text(
-                f"{target_id} is now INVINCIBLE, master~ 👑\n"
-                "They have full unrestricted access to me in every chat. Nothing is off limits."
-            )
 
 
 # =========================
@@ -2926,8 +2801,8 @@ async def _fetch_photo_url(update, context):
         return None
 
 
-async def anna_describe_image(image_url, user_caption, system_prompt, history, user_id=None):
-    """Send the photo + caption to OpenRouter and return Anna's reply."""
+async def anna_describe_image(image_url, user_caption, system_prompt, history):
+    """Send the photo + caption to Gemini Flash via OpenRouter and return Anna's reply."""
     if not openrouter_client:
         return None
     user_text = user_caption.strip() if user_caption else "look at this pic"
@@ -2942,19 +2817,17 @@ async def anna_describe_image(image_url, user_caption, system_prompt, history, u
             {"type": "image_url", "image_url": {"url": image_url}},
         ],
     })
-    # Invincible users get longer replies and a less-filtered model
-    max_tokens_vision = 500 if user_id and is_invincible(user_id) else 120
     try:
         response = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model=get_model_for_user(user_id) if user_id else OPENROUTER_MODEL,
+                model=OPENROUTER_MODEL,
                 messages=messages,
-                max_tokens=max_tokens_vision,
+                max_tokens=120,
                 temperature=0.9,
             )
         )
         if response.choices:
-            return response.choices[0].message.content.strip()[:500 if user_id and is_invincible(user_id) else 300]
+            return response.choices[0].message.content.strip()[:300]
     except Exception as e:
         logger.warning(f"Vision call failed: {e}")
     return None
@@ -3022,8 +2895,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     # Check if user is muted (cooldown after explicit strikes)
-    # Invincible users bypass mutes completely
-    if not is_invincible(user_id) and is_user_muted(user_id):
+    if is_user_muted(user_id):
         logger.info(f"User {user_id} is muted, ignoring message.")
         return
 
@@ -3047,8 +2919,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = get_owner_id()
     is_owner_chat = owner_id and int(user_id) == int(owner_id)
 
-    # GLOBAL SILENCE: If owner said "shut up" — Anna ignores everyone except owner and invincible users
-    if is_global_silence() and not is_owner_chat and not is_invincible(user_id):
+    # GLOBAL SILENCE: If owner said "shut up" — Anna ignores everyone except owner
+    if is_global_silence() and not is_owner_chat:
         return
 
     # Only respond when: mentioned, replied to, or in DMs
@@ -3057,17 +2929,17 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_respond:
         return
 
-    # In DMs, only respond to owner or invincible users — silently ignore everyone else
+    # In DMs, only respond to owner — silently ignore everyone else
     if is_private:
-        if not is_owner_chat and not is_invincible(user_id):
+        if not is_owner_chat:
             return
 
     # Skip if it's a command (but owner commands are processed above)
     if text.startswith("/"):
         return
 
-    # Per-user anti-spam cooldown — owner and invincible users are exempt
-    if not is_owner_chat and not is_invincible(user_id) and is_user_on_cooldown(user_id):
+    # Per-user anti-spam cooldown — owner is exempt
+    if not is_owner_chat and is_user_on_cooldown(user_id):
         return
 
     # =========================
@@ -3177,9 +3049,10 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_memory(user_id, user_name, text)
 
     # Handle explicit content with severity-based graduated response
-    # Owner and invincible users are fully exempt — no strikes, no mutes, no warnings.
+    # Owner is exempt from STRIKES/MUTES (so a casual word doesn't lock him out)
+    # but the LLM is still under SFW rules and will refuse to produce explicit output.
     is_explicit, severity, matched = check_explicit_severity(text)
-    if is_explicit and not is_owner_chat and not is_invincible(user_id):
+    if is_explicit and not is_owner_chat:
         strikes = get_explicit_strikes(user_id)
         response = get_explicit_response(strikes, severity, user_name)
 
@@ -3208,24 +3081,18 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get memory context for the prompt
     memory_context = get_memory_context(user_id, user_name)
 
-    # Detect manipulation attempts (non-owners and non-invincible users trying to claim authority or bully Anna)
-    manipulation_warning = detect_manipulation(text) if not is_owner_chat and not is_invincible(user_id) else None
+    # Detect manipulation attempts (non-owners trying to claim authority or bully Anna)
+    manipulation_warning = detect_manipulation(text) if not is_owner_chat else None
     if manipulation_warning:
         memory_context += " " + manipulation_warning
 
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
 
-    # Prompt selection priority:
-    # 1. Owner in private DMs gets devoted master rules (user edited this to include NSFW).
-    # 2. Invincible non-owner users get unrestricted rules.
-    # 3. Everyone else gets SFW rules.
+    # Owner gets devoted "master" treatment ONLY in private DMs.
+    # In groups, Anna treats the owner like everyone else.
     if is_owner_chat and is_private:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
-    elif is_invincible(user_id):
-        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
-        system_prompt = ANNA_INVINCIBLE_RULES
-        logger.info(f"INVINCIBLE MODE active for user {user_id} in chat {chat_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
 
@@ -3411,9 +3278,6 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # answer with live web results in a single call.
         response = None
 
-        # Dynamic max_tokens: invincible users get much longer replies for explicit/NSFW content
-        max_tokens = 500 if is_invincible(user_id) else (180 if needs_search else 80)
-
         # Send typing indicator so the user sees Anna is "thinking"
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -3430,9 +3294,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Anna web-search for: {text[:60]}")
                     response = await asyncio.to_thread(
                         lambda: openrouter_search_client.chat.completions.create(
-                            model=get_model_for_user(user_id),
+                            model=OPENROUTER_MODEL,
                             messages=messages,
-                            max_tokens=max_tokens,
+                            max_tokens=180,
                             temperature=0.8,
                             extra_body={"plugins": [{"id": "web", "max_results": 3}]}
                         )
@@ -3440,9 +3304,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     response = await asyncio.to_thread(
                         lambda: openrouter_client.chat.completions.create(
-                            model=get_model_for_user(user_id),
+                            model=OPENROUTER_MODEL,
                             messages=messages,
-                            max_tokens=max_tokens,
+                            max_tokens=80,
                             temperature=0.9
                         )
                     )
@@ -3457,9 +3321,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info("Search call failed, retrying without web plugin")
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model=get_model_for_user(user_id),
+                        model=OPENROUTER_MODEL,
                         messages=messages,
-                        max_tokens=max_tokens,
+                        max_tokens=120,
                         temperature=0.9
                     )
                 )
@@ -3473,7 +3337,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=messages,
-                        max_tokens=max_tokens,
+                        max_tokens=180 if needs_search else 80,
                         temperature=0.9
                     )
                 )
@@ -3490,7 +3354,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: cerebras_client.chat.completions.create(
                         model="llama3.1-8b",
                         messages=messages,
-                        max_tokens=max_tokens,
+                        max_tokens=180 if needs_search else 80,
                         temperature=0.9
                     )
                 )
@@ -3499,13 +3363,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if response and response.choices:
             # Search answers can be a bit longer; chitchat stays tight at 200
-            # Invincible users get expanded reply length (up to 1500 chars)
-            if is_invincible(user_id):
-                char_cap = 1500
-            elif needs_search:
-                char_cap = 500
-            else:
-                char_cap = 200
+            char_cap = 500 if needs_search else 200
             reply = response.choices[0].message.content.strip()[:char_cap]
             if reply:
                 # Save Anna's reply to conversation history
@@ -3599,20 +3457,20 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     owner_id = get_owner_id()
     is_owner_chat = owner_id and int(user_id) == int(owner_id)
 
-    # DM owner-only (invincible users bypass DM lock)
-    if is_private and not is_owner_chat and not is_invincible(user_id):
+    # DM owner-only
+    if is_private and not is_owner_chat:
         return
 
-    # Global silence (invincible users bypass)
-    if is_global_silence() and not is_owner_chat and not is_invincible(user_id):
+    # Global silence
+    if is_global_silence() and not is_owner_chat:
         return
 
-    # Anti-spam cooldown (invincible users bypass)
-    if not is_owner_chat and not is_invincible(user_id) and is_user_on_cooldown(user_id):
+    # Anti-spam cooldown
+    if not is_owner_chat and is_user_on_cooldown(user_id):
         return
 
-    # Mute check (invincible users bypass)
-    if not is_invincible(user_id) and is_user_muted(user_id):
+    # Mute check
+    if is_user_muted(user_id):
         return
 
     # Track and update memory
@@ -3628,24 +3486,18 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return  # Couldn't fetch — silently skip
 
     # Build system prompt with memory + vision context
-    # Owner gets ANNA_OWNER_RULES (user edited this for NSFW); invincible non-owners get unrestricted
     if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
-    elif is_invincible(user_id):
-        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
-        system_prompt = ANNA_INVINCIBLE_RULES
-        logger.info(f"INVINCIBLE VISION MODE for user {user_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
-    length_hint = "Reply as long and detailed as the user wants." if is_invincible(user_id) else "Stay short — under 200 chars."
     full_prompt = (
         system_prompt
         + f"\n\nCurrent context: You are in a {chat_context}. {memory_context}"
-        + "\n\nThe user just sent you an image. React to it naturally as Anna would. "
+        + "\n\nThe user just sent you an image. React to it naturally and cutely as Anna would. "
           "Describe what you see briefly if it's interesting, or react to the vibe. "
-          f"{length_hint} No asterisk actions."
+          "Stay short — under 200 chars. No asterisk actions."
     )
 
     # Typing indicator
@@ -3655,7 +3507,7 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pass
 
     history = get_history(update.effective_chat.id, user_id)
-    reply = await anna_describe_image(image_url, caption_text, full_prompt, history, user_id)
+    reply = await anna_describe_image(image_url, caption_text, full_prompt, history)
     if reply:
         add_to_history(update.effective_chat.id, user_id, "user", f"[sent an image] {caption_text}".strip())
         add_to_history(update.effective_chat.id, user_id, "assistant", reply)
@@ -3681,16 +3533,16 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         and update.message.reply_to_message.from_user.id == context.bot.id
     )
 
-    # Voice notes only get attention in DMs (owner or invincible), as a reply to the bot, or from invincible users anywhere
-    if not (is_private or is_reply_to_bot or is_invincible(user_id)):
+    # Voice notes only get attention in DMs (owner) or as a reply to the bot
+    if not (is_private or is_reply_to_bot):
         return
-    if is_private and not is_owner_chat and not is_invincible(user_id):
+    if is_private and not is_owner_chat:
         return
-    if is_global_silence() and not is_owner_chat and not is_invincible(user_id):
+    if is_global_silence() and not is_owner_chat:
         return
-    if not is_owner_chat and not is_invincible(user_id) and is_user_on_cooldown(user_id):
+    if not is_owner_chat and is_user_on_cooldown(user_id):
         return
-    if not is_invincible(user_id) and is_user_muted(user_id):
+    if is_user_muted(user_id):
         return
 
     # Typing indicator while transcribing
@@ -3713,13 +3565,8 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_name = user.username or user.first_name or "friend"
     update_memory(user_id, user_name, transcript)
 
-    # Owner gets ANNA_OWNER_RULES (user edited this for NSFW); invincible non-owners get unrestricted
     if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
-    elif is_invincible(user_id):
-        # Invincible users get ONLY the invincible prompt — base prompt has conflicting SFW rules
-        system_prompt = ANNA_INVINCIBLE_RULES
-        logger.info(f"INVINCIBLE VOICE MODE for user {user_id}")
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
@@ -3740,17 +3587,14 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     add_to_history(chat_id, user_id, "user", f"[voice] {transcript}")
 
-    # Dynamic max_tokens: invincible users get much longer replies for explicit/NSFW content
-    max_tokens_voice = 500 if is_invincible(user_id) else 80
-
     response = None
     if openrouter_client:
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model=get_model_for_user(user_id),
+                    model=OPENROUTER_MODEL,
                     messages=messages,
-                    max_tokens=max_tokens_voice,
+                    max_tokens=80,
                     temperature=0.9,
                 )
             )
@@ -3907,7 +3751,6 @@ def run_bot():
             application.add_handler(CommandHandler("learn", learn_command))
             application.add_handler(CommandHandler("unlearn", unlearn_command))
             application.add_handler(CommandHandler("learned", learned_command))
-            application.add_handler(CommandHandler("invincible", invincible_command))
             application.add_handler(CommandHandler("vibe", vibe_command))
             application.add_handler(CommandHandler("diag", diag_command))
             application.add_handler(CommandHandler("reset", reset_command))
