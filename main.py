@@ -42,6 +42,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+INVINCIBLE_MODEL = os.getenv("INVINCIBLE_MODEL", "deepseek/deepseek-chat")  # Less-filtered model for invincible users
 CMC_API_KEY = os.getenv("CMC_API_KEY")  # Optional CoinMarketCap key
 
 if not BOT_TOKEN:
@@ -329,6 +330,11 @@ def remove_invincible(user_id):
 
 def list_invincible():
     return sorted(list(_invincible_users))
+
+
+def get_model_for_user(user_id):
+    """Return the OpenRouter model slug to use for this user."""
+    return INVINCIBLE_MODEL if is_invincible(user_id) else OPENROUTER_MODEL
 
 
 # Explicit word severity levels
@@ -2920,8 +2926,8 @@ async def _fetch_photo_url(update, context):
         return None
 
 
-async def anna_describe_image(image_url, user_caption, system_prompt, history):
-    """Send the photo + caption to Gemini Flash via OpenRouter and return Anna's reply."""
+async def anna_describe_image(image_url, user_caption, system_prompt, history, user_id=None):
+    """Send the photo + caption to OpenRouter and return Anna's reply."""
     if not openrouter_client:
         return None
     user_text = user_caption.strip() if user_caption else "look at this pic"
@@ -2936,17 +2942,19 @@ async def anna_describe_image(image_url, user_caption, system_prompt, history):
             {"type": "image_url", "image_url": {"url": image_url}},
         ],
     })
+    # Invincible users get longer replies and a less-filtered model
+    max_tokens_vision = 500 if user_id and is_invincible(user_id) else 120
     try:
         response = await asyncio.to_thread(
             lambda: openrouter_client.chat.completions.create(
-                model=OPENROUTER_MODEL,
+                model=get_model_for_user(user_id) if user_id else OPENROUTER_MODEL,
                 messages=messages,
-                max_tokens=120,
+                max_tokens=max_tokens_vision,
                 temperature=0.9,
             )
         )
         if response.choices:
-            return response.choices[0].message.content.strip()[:300]
+            return response.choices[0].message.content.strip()[:500 if user_id and is_invincible(user_id) else 300]
     except Exception as e:
         logger.warning(f"Vision call failed: {e}")
     return None
@@ -3420,7 +3428,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Anna web-search for: {text[:60]}")
                     response = await asyncio.to_thread(
                         lambda: openrouter_search_client.chat.completions.create(
-                            model=OPENROUTER_MODEL,
+                            model=get_model_for_user(user_id),
                             messages=messages,
                             max_tokens=max_tokens,
                             temperature=0.8,
@@ -3430,7 +3438,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     response = await asyncio.to_thread(
                         lambda: openrouter_client.chat.completions.create(
-                            model=OPENROUTER_MODEL,
+                            model=get_model_for_user(user_id),
                             messages=messages,
                             max_tokens=max_tokens,
                             temperature=0.9
@@ -3447,7 +3455,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info("Search call failed, retrying without web plugin")
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model=OPENROUTER_MODEL,
+                        model=get_model_for_user(user_id),
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=0.9
@@ -3642,7 +3650,7 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pass
 
     history = get_history(update.effective_chat.id, user_id)
-    reply = await anna_describe_image(image_url, caption_text, full_prompt, history)
+    reply = await anna_describe_image(image_url, caption_text, full_prompt, history, user_id)
     if reply:
         add_to_history(update.effective_chat.id, user_id, "user", f"[sent an image] {caption_text}".strip())
         add_to_history(update.effective_chat.id, user_id, "assistant", reply)
@@ -3724,14 +3732,17 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     add_to_history(chat_id, user_id, "user", f"[voice] {transcript}")
 
+    # Dynamic max_tokens: invincible users get much longer replies for explicit/NSFW content
+    max_tokens_voice = 500 if is_invincible(user_id) else 80
+
     response = None
     if openrouter_client:
         try:
             response = await asyncio.to_thread(
                 lambda: openrouter_client.chat.completions.create(
-                    model=OPENROUTER_MODEL,
+                    model=get_model_for_user(user_id),
                     messages=messages,
-                    max_tokens=80,
+                    max_tokens=max_tokens_voice,
                     temperature=0.9,
                 )
             )
