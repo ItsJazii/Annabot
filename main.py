@@ -3217,13 +3217,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
 
     # Prompt selection priority:
-    # 1. Invincible users (owner + designated) get unrestricted rules in every chat.
-    # 2. Owner in private DMs gets devoted master rules.
+    # 1. Owner in private DMs gets devoted master rules (user edited this to include NSFW).
+    # 2. Invincible non-owner users get unrestricted rules.
     # 3. Everyone else gets SFW rules.
-    if is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
-    elif is_owner_chat and is_private:
+    if is_owner_chat and is_private:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
+    elif is_invincible(user_id):
+        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
 
@@ -3626,10 +3626,11 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return  # Couldn't fetch — silently skip
 
     # Build system prompt with memory + vision context
-    if is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
-    elif is_owner_chat:
+    # Owner gets ANNA_OWNER_RULES (user edited this for NSFW); invincible non-owners get unrestricted
+    if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
+    elif is_invincible(user_id):
+        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
@@ -3708,10 +3709,11 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_name = user.username or user.first_name or "friend"
     update_memory(user_id, user_name, transcript)
 
-    if is_invincible(user_id):
-        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
-    elif is_owner_chat:
+    # Owner gets ANNA_OWNER_RULES (user edited this for NSFW); invincible non-owners get unrestricted
+    if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
+    elif is_invincible(user_id):
+        system_prompt = ANNA_BASE_PROMPT + ANNA_INVINCIBLE_RULES
     else:
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
     memory_context = get_memory_context(user_id, user_name)
