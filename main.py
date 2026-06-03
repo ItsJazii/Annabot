@@ -3401,6 +3401,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # answer with live web results in a single call.
         response = None
 
+        # Dynamic max_tokens: invincible users get much longer replies for explicit/NSFW content
+        max_tokens = 500 if is_invincible(user_id) else (180 if needs_search else 80)
+
         # Send typing indicator so the user sees Anna is "thinking"
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
@@ -3419,7 +3422,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lambda: openrouter_search_client.chat.completions.create(
                             model=OPENROUTER_MODEL,
                             messages=messages,
-                            max_tokens=180,
+                            max_tokens=max_tokens,
                             temperature=0.8,
                             extra_body={"plugins": [{"id": "web", "max_results": 3}]}
                         )
@@ -3429,7 +3432,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lambda: openrouter_client.chat.completions.create(
                             model=OPENROUTER_MODEL,
                             messages=messages,
-                            max_tokens=80,
+                            max_tokens=max_tokens,
                             temperature=0.9
                         )
                     )
@@ -3446,7 +3449,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: openrouter_client.chat.completions.create(
                         model=OPENROUTER_MODEL,
                         messages=messages,
-                        max_tokens=120,
+                        max_tokens=max_tokens,
                         temperature=0.9
                     )
                 )
@@ -3460,7 +3463,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=messages,
-                        max_tokens=180 if needs_search else 80,
+                        max_tokens=max_tokens,
                         temperature=0.9
                     )
                 )
@@ -3477,7 +3480,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: cerebras_client.chat.completions.create(
                         model="llama3.1-8b",
                         messages=messages,
-                        max_tokens=180 if needs_search else 80,
+                        max_tokens=max_tokens,
                         temperature=0.9
                     )
                 )
