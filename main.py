@@ -182,6 +182,43 @@ def save_json(path, data):
         logger.error(f"Failed to save {path}: {e}")
 
 
+_LINK_REQUEST_RE = re.compile(r"\b(link|url|website|send (me|the)|give (me|the)|share (the|a))\b", re.IGNORECASE)
+
+
+def _sanitize_reply(text, user_text="", max_chars=200):
+    """Clean Anna's reply before sending: enforce length and strip links UNLESS user asked for one.
+    If the text exceeds max_chars, cut at the first sentence boundary to keep it natural."""
+    if not text:
+        return text
+
+    user_asked_for_link = bool(_LINK_REQUEST_RE.search(user_text or ""))
+
+    if not user_asked_for_link:
+        # Strip markdown links [text](url) → text (keep the label)
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+        # Strip raw URLs (http://... or https://...)
+        text = re.sub(r"https?://\S+", "", text)
+        # Strip bare www. links
+        text = re.sub(r"www\.\S+", "", text)
+        # Clean up extra spaces left behind
+        text = re.sub(r"\s+", " ", text).strip()
+
+    if len(text) <= max_chars:
+        return text
+
+    # Try to cut at the first sentence boundary (., !, ?) within the limit
+    cutoff = max_chars
+    for i in range(cutoff, 0, -1):
+        if i < len(text) and text[i] in ".!?":
+            candidate = text[:i + 1].strip()
+            if len(candidate) >= 20:
+                return candidate
+            break
+
+    # Fallback: hard truncate with ellipsis
+    return text[:max_chars].rsplit(" ", 1)[0] + "…"
+
+
 # =========================
 # DATABASE OPERATIONS
 # =========================
@@ -2015,6 +2052,7 @@ Rules:
 - Use your cute anime personality (short sentences, simple English, 1-2 emojis max)
 - If there were photos/videos shared, mention that briefly
 - Be natural and punchy, like a friend catching someone up
+- NO links, URLs, or citations
 
 Chat transcript:
 {transcript}
@@ -2064,6 +2102,7 @@ TLDR:"""
 
     if response and response.choices:
         summary = response.choices[0].message.content.strip()[:500]
+        summary = _sanitize_reply(summary, user_text="", max_chars=500)
         if summary:
             return summary
 
@@ -2714,6 +2753,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.debug(f"Retry failed: {e}")
         reply = ""
+    reply = _sanitize_reply(reply, user_text=last_user or "", max_chars=300)
     if not reply:
         await update.message.reply_text("Eep~ my brain glitched, try again? 😅")
         return
@@ -3364,7 +3404,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response and response.choices:
             # Search answers can be a bit longer; chitchat stays tight at 200
             char_cap = 500 if needs_search else 200
-            reply = response.choices[0].message.content.strip()[:char_cap]
+            raw_reply = response.choices[0].message.content.strip()
+            reply = _sanitize_reply(raw_reply, user_text=text, max_chars=char_cap)
             if reply:
                 # Save Anna's reply to conversation history
                 add_to_history(chat_id, user_id, "assistant", reply)
@@ -3509,6 +3550,7 @@ async def anna_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     history = get_history(update.effective_chat.id, user_id)
     reply = await anna_describe_image(image_url, caption_text, full_prompt, history)
     if reply:
+        reply = _sanitize_reply(reply, user_text=caption_text or "", max_chars=300)
         add_to_history(update.effective_chat.id, user_id, "user", f"[sent an image] {caption_text}".strip())
         add_to_history(update.effective_chat.id, user_id, "assistant", reply)
         mark_user_replied(user_id)
@@ -3602,7 +3644,8 @@ async def anna_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.warning(f"OpenRouter voice reply failed: {e}")
 
     if response and response.choices:
-        reply = response.choices[0].message.content.strip()[:200]
+        reply = response.choices[0].message.content.strip()
+        reply = _sanitize_reply(reply, user_text=transcript or "", max_chars=200)
         if reply:
             add_to_history(chat_id, user_id, "assistant", reply)
             mark_user_replied(user_id)
@@ -3686,7 +3729,7 @@ async def vibe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = (
         "You are Anna, a cute anime waifu. Read this last hour of group chat and give a "
         "ONE-LINE vibe check (under 80 chars), like 'chaotic gamer energy 🎮' or "
-        "'wholesome chat night 💕' or 'argument central rn 😤'. Just one line, no preamble.\n\n"
+        "'wholesome chat night 💕' or 'argument central rn 😤'. Just one line, no preamble, no links.\n\n"
         f"Chat:\n{snippet}\n\nVibe:"
     )
 
@@ -3706,6 +3749,7 @@ async def vibe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if response and response.choices:
         vibe = response.choices[0].message.content.strip()[:120]
+        vibe = _sanitize_reply(vibe, user_text="", max_chars=120)
         await update.message.reply_text(f"vibe check~ {vibe}")
     else:
         await update.message.reply_text("Anna's brain is foggy rn~ try again in a min 💤")
