@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jazii — Content Creator & Vibe Coder</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'monospace'],
+            display: ['"Space Grotesk"', 'sans-serif'],
+          },
+          colors: {
+            neon: {
+              purple: '#a855f7',
+              cyan: '#22d3ee',
+              lime: '#a3e635',
+            },
+            surface: {
+              900: '#0a0a0f',
+              800: '#111118',
+              700: '#1a1a24',
+              600: '#24242f',
+            },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0a0a0f; }
+    ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 3px; }
+
+    /* ── glow utilities ── */
+    .glow-purple { box-shadow: 0 0 20px rgba(168, 85, 247, 0.15), 0 0 60px rgba(168, 85, 247, 0.05); }
+    .glow-cyan   { box-shadow: 0 0 20px rgba(34, 211, 238, 0.15), 0 0 60px rgba(34, 211, 238, 0.05); }
+    .glow-lime   { box-shadow: 0 0 20px rgba(163, 230, 53, 0.15), 0 0 60px rgba(163, 230, 53, 0.05); }
+    .glow-purple-text { text-shadow: 0 0 30px rgba(168, 85, 247, 0.6); }
+    .glow-cyan-text   { text-shadow: 0 0 30px rgba(34, 211, 238, 0.6); }
+
+    /* ── glassmorphism card ── */
+    .glass {
+      background: rgba(17, 17, 24, 0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(168, 85, 247, 0.1);
+    }
+
+    /* ── animated gradient border ── */
+    .gradient-border {
+      position: relative;
+    }
+    .gradient-border::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(135deg, #a855f7, #22d3ee, #a3e635, #a855f7);
+      background-size: 300% 300%;
+      animation: borderShift 6s ease infinite;
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      z-index: 0;
+    }
+    .gradient-border > * { position: relative; z-index: 1; }
+
+    @keyframes borderShift {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    /* ── floating grid bg ── */
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(168, 85, 247, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(168, 85, 247, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    /* ── hero particles ── */
+    .particle {
+      position: absolute;
+      width: 2px;
+      height: 2px;
+      border-radius: 50%;
+      animation: float linear infinite;
+      opacity: 0;
+    }
+    @keyframes float {
+      0%   { transform: translateY(0) scale(0); opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      100% { transform: translateY(-100vh) scale(1); opacity: 0; }
+    }
+
+    /* ── cursor blink ── */
+    .cursor-blink::after {
+      content: '▌';
+      animation: blink 1s step-end infinite;
+      color: #a855f7;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0; }
+    }
+
+    /* ── fade-in on scroll ── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.8s ease, transform 0.8s ease;
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ── nav link hover ── */
+    .nav-link {
+      position: relative;
+    }
+    .nav-link::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      width: 0;
+      height: 1px;
+      background: #a855f7;
+      transition: width 0.3s ease;
+    }
+    .nav-link:hover::after {
+      width: 100%;
+    }
+
+    /* ── tag hover ── */
+    .tag {
+      transition: all 0.3s ease;
+    }
+    .tag:hover {
+      background: rgba(168, 85, 247, 0.2);
+      border-color: rgba(168, 85, 247, 0.5);
+      transform: translateY(-1px);
+    }
+  </style>
+</head>
+
+<body class="grid-bg antialiased">
+
+  <!-- ═══════════════════  NAV  ═══════════════════ -->
+  <nav class="fixed top-0 w-full z-50 glass border-b border-white/5">
+    <div class="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
+      <a href="#hero" class="font-display text-lg font-bold tracking-tight text-white">
+        <span class="text-neon-purple">J</span>azii<span class="text-neon-purple">.</span>
+      </a>
+      <!-- desktop -->
+      <div class="hidden md:flex items-center gap-8 text-sm font-mono text-gray-400">
+        <a href="#about" class="nav-link hover:text-white transition-colors">about</a>
+        <a href="#work" class="nav-link hover:text-white transition-colors">work</a>
+        <a href="#offer" class="nav-link hover:text-white transition-colors">offer</a>
+        <a href="#contact" class="nav-link hover:text-white transition-colors">contact</a>
+      </div>
+      <!-- mobile hamburger -->
+      <button id="menuBtn" class="md:hidden text-gray-400 hover:text-white transition-colors" aria-label="Menu">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+    </div>
+    <!-- mobile menu -->
+    <div id="mobileMenu" class="hidden md:hidden px-6 pb-4 space-y-3 text-sm font-mono text-gray-400">
+      <a href="#about" class="block hover:text-white transition-colors">about</a>
+      <a href="#work" class="block hover:text-white transition-colors">work</a>
+      <a href="#offer" class="block hover:text-white transition-colors">offer</a>
+      <a href="#contact" class="block hover:text-white transition-colors">contact</a>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════  HERO  ═══════════════════ -->
+  <section id="hero" class="relative min-h-screen flex items-center justify-center overflow-hidden">
+    <!-- particles container -->
+    <div id="particles" class="absolute inset-0 pointer-events-none"></div>
+
+    <!-- radial glow -->
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-neon-purple/5 blur-[120px] pointer-events-none"></div>
+    <div class="absolute top-1/3 right-1/4 w-[300px] h-[300px] rounded-full bg-neon-cyan/5 blur-[100px] pointer-events-none"></div>
+
+    <div class="relative z-10 text-center px-6">
+      <p class="font-mono text-sm text-neon-cyan tracking-widest uppercase mb-4 opacity-80">// portfolio.init()</p>
+      <h1 class="font-display text-6xl sm:text-7xl md:text-8xl font-bold text-white glow-purple-text leading-none mb-4">
+        Jazii
+      </h1>
+      <div class="flex items-center justify-center gap-3 mb-8">
+        <span class="h-px w-12 bg-gradient-to-r from-transparent to-neon-purple"></span>
+        <p class="font-mono text-base sm:text-lg text-gray-400">
+          Content Creator <span class="text-neon-purple">&</span> Vibe Coder
+        </p>
+        <span class="h-px w-12 bg-gradient-to-l from-transparent to-neon-purple"></span>
+      </div>
+      <p class="font-mono text-sm text-gray-500 cursor-blink">building the future with AI</p>
+      <div class="mt-12 flex items-center justify-center gap-4">
+        <a href="#about" class="group inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-neon-purple/10 border border-neon-purple/30 text-neon-purple font-mono text-sm hover:bg-neon-purple/20 hover:border-neon-purple/50 transition-all duration-300 glow-purple">
+          explore
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 group-hover:translate-y-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </a>
+        <a href="#contact" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-white/10 text-gray-400 font-mono text-sm hover:border-white/20 hover:text-white transition-all duration-300">
+          connect
+        </a>
+      </div>
+    </div>
+
+    <!-- scroll indicator -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-gray-600">
+      <span class="font-mono text-xs">scroll</span>
+      <div class="w-px h-8 bg-gradient-to-b from-neon-purple/50 to-transparent animate-pulse"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════  ABOUT  ═══════════════════ -->
+  <section id="about" class="py-28 px-6">
+    <div class="max-w-4xl mx-auto">
+      <div class="reveal">
+        <p class="font-mono text-xs text-neon-purple tracking-widest uppercase mb-2">// 01</p>
+        <h2 class="font-display text-4xl sm:text-5xl font-bold text-white mb-12">About<span class="text-neon-purple">.</span></h2>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-8">
+        <!-- bio card -->
+        <div class="reveal glass rounded-2xl p-8 glow-purple">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-3 h-3 rounded-full bg-neon-purple animate-pulse"></div>
+            <span class="font-mono text-xs text-gray-500">jazii.bio</span>
+          </div>
+          <div class="space-y-4 font-mono text-sm leading-relaxed text-gray-300">
+            <p>
+              <span class="text-neon-cyan">→</span> AI & Gaming content creator, crypto dabbler.
+            </p>
+            <p>
+              <span class="text-neon-cyan">→</span> Deep believer in the future of AI.
+            </p>
+            <p>
+              <span class="text-neon-cyan">→</span> Experience: Worked with industry giants like <span class="text-neon-lime font-semibold">Binance</span>.
+            </p>
+          </div>
+        </div>
+
+        <!-- stats / tags -->
+        <div class="reveal glass rounded-2xl p-8 glow-cyan">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-3 h-3 rounded-full bg-neon-cyan animate-pulse"></div>
+            <span class="font-mono text-xs text-gray-500">jazii.stack</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">AI / ML</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Gaming</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Crypto</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Content</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Python</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Agents</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Automation</span>
+            <span class="tag px-3 py-1.5 rounded-full border border-white/10 font-mono text-xs text-gray-400">Web3</span>
+          </div>
+          <div class="mt-6 pt-6 border-t border-white/5">
+            <p class="font-mono text-xs text-gray-500 mb-3">status</p>
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-neon-lime animate-pulse"></span>
+              <span class="font-mono text-sm text-neon-lime">open to collabs</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════  WHAT I DO  ═══════════════════ -->
+  <section id="work" class="py-28 px-6">
+    <div class="max-w-4xl mx-auto">
+      <div class="reveal">
+        <p class="font-mono text-xs text-neon-cyan tracking-widest uppercase mb-2">// 02</p>
+        <h2 class="font-display text-4xl sm:text-5xl font-bold text-white mb-12">What I Do<span class="text-neon-cyan">.</span></h2>
+      </div>
+
+      <div class="grid sm:grid-cols-3 gap-6">
+        <!-- card 1 -->
+        <div class="reveal gradient-border rounded-2xl">
+          <div class="glass rounded-2xl p-6 h-full flex flex-col">
+            <div class="w-10 h-10 rounded-lg bg-neon-purple/10 border border-neon-purple/20 flex items-center justify-center mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-neon-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            </div>
+            <h3 class="font-display text-lg font-semibold text-white mb-2">Autonomous Frameworks</h3>
+            <p class="font-mono text-xs text-gray-500 leading-relaxed mt-auto">Building self-governing AI systems that reason, adapt, and execute without hand-holding.</p>
+          </div>
+        </div>
+
+        <!-- card 2 -->
+        <div class="reveal gradient-border rounded-2xl">
+          <div class="glass rounded-2xl p-6 h-full flex flex-col">
+            <div class="w-10 h-10 rounded-lg bg-neon-cyan/10 border border-neon-cyan/20 flex items-center justify-center mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-neon-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            </div>
+            <h3 class="font-display text-lg font-semibold text-white mb-2">Agent Architecture</h3>
+            <p class="font-mono text-xs text-gray-500 leading-relaxed mt-auto">Designing multi-agent orchestration pipelines with failover, memory, and real-time tool use.</p>
+          </div>
+        </div>
+
+        <!-- card 3 -->
+        <div class="reveal gradient-border rounded-2xl">
+          <div class="glass rounded-2xl p-6 h-full flex flex-col">
+            <div class="w-10 h-10 rounded-lg bg-neon-lime/10 border border-neon-lime/20 flex items-center justify-center mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-neon-lime" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <h3 class="font-display text-lg font-semibold text-white mb-2">High-Velocity Content</h3>
+            <p class="font-mono text-xs text-gray-500 leading-relaxed mt-auto">AI & Gaming content at speed — breakdowns, tutorials, live builds, and vibe-coded demos.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════  WHAT I OFFER  ═══════════════════ -->
+  <section id="offer" class="py-28 px-6">
+    <div class="max-w-4xl mx-auto">
+      <div class="reveal">
+        <p class="font-mono text-xs text-neon-lime tracking-widest uppercase mb-2">// 03</p>
+        <h2 class="font-display text-4xl sm:text-5xl font-bold text-white mb-12">What I Offer<span class="text-neon-lime">.</span></h2>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-6">
+        <!-- offer 1 -->
+        <div class="reveal glass rounded-2xl p-8 hover:border-neon-purple/30 transition-all duration-500 group">
+          <div class="font-mono text-5xl font-bold text-neon-purple/20 group-hover:text-neon-purple/40 transition-colors mb-4">01</div>
+          <h3 class="font-display text-xl font-semibold text-white mb-3">Brand Collabs</h3>
+          <p class="font-mono text-xs text-gray-500 leading-relaxed">Strategic partnerships with Web3, AI, and gaming brands. Authentic content that resonates.</p>
+        </div>
+
+        <!-- offer 2 -->
+        <div class="reveal glass rounded-2xl p-8 hover:border-neon-cyan/30 transition-all duration-500 group">
+          <div class="font-mono text-5xl font-bold text-neon-cyan/20 group-hover:text-neon-cyan/40 transition-colors mb-4">02</div>
+          <h3 class="font-display text-xl font-semibold text-white mb-3">Custom Orchestration</h3>
+          <p class="font-mono text-xs text-gray-500 leading-relaxed">Bespoke AI agent pipelines — multi-provider failover, memory systems, tool integration.</p>
+        </div>
+
+        <!-- offer 3 -->
+        <div class="reveal glass rounded-2xl p-8 hover:border-neon-lime/30 transition-all duration-500 group">
+          <div class="font-mono text-5xl font-bold text-neon-lime/20 group-hover:text-neon-lime/40 transition-colors mb-4">03</div>
+          <h3 class="font-display text-xl font-semibold text-white mb-3">Vibe Coding</h3>
+          <p class="font-mono text-xs text-gray-500 leading-relaxed">Ship fast, ship aesthetic. Rapid prototyping with premium polish — from idea to deployed in hours.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════  CONTACT  ═══════════════════ -->
+  <section id="contact" class="py-28 px-6">
+    <div class="max-w-2xl mx-auto text-center">
+      <div class="reveal">
+        <p class="font-mono text-xs text-neon-purple tracking-widest uppercase mb-2">// 04</p>
+        <h2 class="font-display text-4xl sm:text-5xl font-bold text-white mb-6">Let's Build<span class="text-neon-purple">.</span></h2>
+        <p class="font-mono text-sm text-gray-500 mb-12">Got a project, collab, or just wanna talk AI?</p>
+      </div>
+
+      <div class="reveal gradient-border rounded-2xl inline-block">
+        <a href="mailto:jaziialee07@gmail.com" class="glass rounded-2xl px-10 py-5 inline-flex items-center gap-3 font-mono text-sm text-neon-purple hover:text-white transition-colors">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+          jaziialee07@gmail.com
+        </a>
+      </div>
+
+      <div class="reveal flex items-center justify-center gap-6 mt-10">
+        <a href="https://github.com/ItsJazii" target="_blank" rel="noopener" class="text-gray-600 hover:text-neon-purple transition-colors" aria-label="GitHub">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+        <a href="https://twitter.com/itsjazii" target="_blank" rel="noopener" class="text-gray-600 hover:text-neon-cyan transition-colors" aria-label="Twitter / X">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════  FOOTER  ═══════════════════ -->
+  <footer class="border-t border-white/5 py-8 px-6">
+    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      <p class="font-mono text-xs text-gray-600">&copy; 2026 Jazii. All rights reserved.</p>
+      <p class="font-mono text-xs text-gray-700">built with <span class="text-neon-purple">vibes</span> & precision</p>
+    </div>
+  </footer>
+
+  <!-- ═══════════════════  SCRIPTS  ═══════════════════ -->
+  <script>
+    // ── mobile menu toggle ──
+    const menuBtn = document.getElementById('menuBtn');
+    const mobileMenu = document.getElementById('mobileMenu');
+    menuBtn.addEventListener('click', () => mobileMenu.classList.toggle('hidden'));
+    mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobileMenu.classList.add('hidden')));
+
+    // ── scroll reveal ──
+    const observer = new IntersectionObserver(
+      entries => entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); }),
+      { threshold: 0.15 }
+    );
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // ── hero particles ──
+    (function createParticles() {
+      const container = document.getElementById('particles');
+      const colors = ['#a855f7', '#22d3ee', '#a3e635'];
+      for (let i = 0; i < 40; i++) {
+        const p = document.createElement('div');
+        p.className = 'particle';
+        p.style.left = Math.random() * 100 + '%';
+        p.style.bottom = '-2px';
+        p.style.background = colors[Math.floor(Math.random() * colors.length)];
+        p.style.animationDuration = (8 + Math.random() * 12) + 's';
+        p.style.animationDelay = (Math.random() * 15) + 's';
+        container.appendChild(p);
+      }
+    })();
+
+    // ── smooth scroll for nav ──
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function(e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+  </script>
+</body>
+</html>
