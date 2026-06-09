@@ -101,12 +101,19 @@ Human texting voice:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_system_prompt(user_name: str = "friend", is_owner: bool = False) -> str:
+def get_system_prompt(
+    user_name: str = "friend",
+    is_owner: bool = False,
+    memory_context: str = "",
+) -> str:
     """Build the full system prompt for a given user."""
     sections = [IDENTITY, CONVERSATION_PROTOCOL, BEHAVIOR, VOICE, STYLE, PERSONALITY]
 
     if user_name:
         sections.append(f"<context>\nYou are talking to {user_name}.\n</context>")
+
+    if memory_context:
+        sections.append(f"<memory>\n{memory_context}\n</memory>")
 
     if is_owner:
         sections.append(
