@@ -628,10 +628,10 @@ def get_memory_context(user_id, user_name):
     """Get Anna's memory/opinion of a user for the prompt. Natural language, no brackets."""
     uid = str(user_id)
 
-    # MASTER OVERRIDE: Owner is always recognized as master, everywhere
+    # OWNER OVERRIDE: Owner is always recognized, everywhere
     owner_id = get_owner_id()
     if owner_id and int(uid) == int(owner_id):
-        return f"This is my MASTER, {user_name}. He is my owner and senpai, the most important person to me. I call him 'master' or 'senpai' and I'm devoted, warm, and eager to please him in a wholesome anime way. I obey his legitimate commands (silence/speak, etc). I'm soft, blushy, and affectionate with him — but I still keep things wholesome. No explicit stuff, no slurs. Even with my master, Anna stays cute. 💕"
+        return f"This is my owner, {user_name}. The most important person to me. I'm devoted, warm, and eager to please in a wholesome anime way. I obey legitimate commands (silence/speak, etc). I'm soft, blushy, and affectionate — but I still keep things wholesome. No explicit stuff, no slurs. I never call anyone 'master' or 'senpai'. I use their name or a cute nickname instead. 💕"
 
     if uid not in _anna_memory:
         return f"This is my first time really talking to {user_name}. I'm curious about them!"
@@ -711,8 +711,8 @@ def track_user(user):
 # ADMIN SYSTEM
 # =========================
 def get_owner_id():
-    """Get owner ID. Hardcoded fallback ensures master is always recognized."""
-    # Hardcoded master ID — always recognized regardless of env/database
+    """Get owner ID. Hardcoded fallback ensures owner is always recognized."""
+    # Hardcoded owner ID — always recognized regardless of env/database
     MASTER_ID = 6758092469
     
     # Check env var first
@@ -734,7 +734,7 @@ def get_owner_id():
         except (ValueError, TypeError):
             pass
     
-    # If nothing matches the master ID, return master ID anyway
+    # If nothing matches the owner ID, return owner ID anyway
     # This prevents anyone else from becoming owner
     return MASTER_ID
 
@@ -1256,14 +1256,14 @@ async def shutup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
-        await update.message.reply_text("Mou~ only my master can command me like that 💙")
+        await update.message.reply_text("Mou~ only my owner can command me like that 💙")
         return
 
     if not is_global_silence():
         set_global_silence(True)
-        await update.message.reply_text("Yes master~ I'll be quiet for everyone except you 🔇💕")
+        await update.message.reply_text("Okay~ I'll be quiet for everyone except you 🔇💕")
     else:
-        await update.message.reply_text("I'm already in silent mode, master~ only listening to you 💙")
+        await update.message.reply_text("I'm already in silent mode~ only listening to you 💙")
 
 
 async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1272,14 +1272,14 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
-        await update.message.reply_text("Mou~ only my master can bring me back~ 💙")
+        await update.message.reply_text("Mou~ only my owner can bring me back~ 💙")
         return
 
     if is_global_silence():
         set_global_silence(False)
-        await update.message.reply_text("I'm back, master~ I'll be my cute self with everyone again! ✨💕")
+        await update.message.reply_text("I'm back~ I'll be my cute self with everyone again! ✨💕")
     else:
-        await update.message.reply_text("I was already chatting with everyone, master~ 💫")
+        await update.message.reply_text("I was already chatting with everyone~ 💫")
 
 
 # =========================
@@ -1291,7 +1291,7 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
-        await update.message.reply_text("Mou~ only my master can peek into my memories~ 💙")
+        await update.message.reply_text("Mou~ only my owner can peek into my memories~ 💙")
         return
 
     if not update.message.reply_to_message:
@@ -1356,7 +1356,7 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
-        await update.message.reply_text("Mou~ only my master can erase my memories~ 💙")
+        await update.message.reply_text("Mou~ only my owner can erase my memories~ 💙")
         return
 
     if not update.message.reply_to_message:
@@ -1370,9 +1370,9 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id in _anna_memory:
         del _anna_memory[target_id]
         _save_memory()
-        await update.message.reply_text(f"Forgotten everything about {target_name}, master~ ✨ It's like they never existed to me.")
+        await update.message.reply_text(f"Forgotten everything about {target_name}~ ✨ It's like they never existed to me.")
     else:
-        await update.message.reply_text(f"I already don't remember {target_name}, master~ 💫")
+        await update.message.reply_text(f"I already don't remember {target_name}~ 💫")
 
 
 # =========================
@@ -1384,7 +1384,7 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Example: /learn megaeth chain | MegaETH is a real-time L2 with sub-millisecond blocks."""
     track_user(update.effective_user)
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Mou~ only my master can teach me things 💙")
+        await update.message.reply_text("Mou~ only my owner can teach me things 💙")
         return
 
     raw = " ".join(context.args) if context.args else ""
@@ -1400,11 +1400,11 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = topic.strip()
     fact = fact.strip()
     if not topic or not fact:
-        await update.message.reply_text("Need both a topic and a fact, master~ 🥺")
+        await update.message.reply_text("Need both a topic and a fact~ 🥺")
         return
 
     if add_learned_fact(topic, fact, source="manual"):
-        await update.message.reply_text(f"Got it, master~ 📝 I'll remember:\n*{topic}* → {fact[:200]}")
+        await update.message.reply_text(f"Got it~ 📝 I'll remember:\n*{topic}* → {fact[:200]}")
     else:
         await update.message.reply_text("Couldn't save that one, gomen~ try a shorter topic? 😢")
 
@@ -1414,7 +1414,7 @@ async def unlearn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Usage: /unlearn topic"""
     track_user(update.effective_user)
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Mou~ only my master can erase what I've learned 💙")
+        await update.message.reply_text("Mou~ only my owner can erase what I've learned 💙")
         return
 
     topic = " ".join(context.args) if context.args else ""
@@ -1423,20 +1423,20 @@ async def unlearn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if forget_learned(topic):
-        await update.message.reply_text(f"Forgotten about *{topic}*, master~ ✨")
+        await update.message.reply_text(f"Forgotten about *{topic}*~ ✨")
     else:
-        await update.message.reply_text(f"I don't have anything saved for *{topic}*, master~ 💫")
+        await update.message.reply_text(f"I don't have anything saved for *{topic}*~ 💫")
 
 
 async def learned_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Owner command: list what Anna has learned. Optional search arg."""
     track_user(update.effective_user)
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Mou~ this is for my master only 💙")
+        await update.message.reply_text("Mou~ this is for my owner only 💙")
         return
 
     if not _learned_facts:
-        await update.message.reply_text("I haven't learned anything yet, master~ 📚")
+        await update.message.reply_text("I haven't learned anything yet~ 📚")
         return
 
     query = " ".join(context.args).strip().lower() if context.args else ""
@@ -1447,7 +1447,7 @@ async def learned_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if query in k or query in e.get("topic", "").lower() or query in e.get("fact", "").lower()
         ]
         if not items:
-            await update.message.reply_text(f"Nothing learned matching '{query}', master~ 💫")
+            await update.message.reply_text(f"Nothing learned matching '{query}'~ 💫")
             return
 
     # Sort by hits desc, then most recent
@@ -1591,7 +1591,7 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_url = f"https://image.pollinations.ai/prompt/{encoded_query}?width=1024&height=1024&nologo=true&seed={random.randint(1, 999999)}"
 
         cute_captions = [
-            f"Here you go, senpai~ ✨ ({query})",
+            f"Here you go~ ✨ ({query})",
             f"Anna made this for you~ 💫 ({query})",
             f"Uwaa, look what I generated~ 🌸 ({query})",
             f"Created with love~ 💙 ({query})",
@@ -1643,7 +1643,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         cute_captions = [
-            "Found a video for you, senpai~ ✨",
+            "Found a video for you~ ✨",
             "Here~ watch this 💫",
             "Uwaa, this looks good~ 🌸",
             "Anna found it~ 💙",
@@ -2152,12 +2152,12 @@ async def tldr_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     if is_private_chat(update):
-        await update.message.reply_text("Use this in a group, master~ 💫")
+        await update.message.reply_text("Use this in a group~ 💫")
         return
 
     if chat_id not in _group_message_buffer or not _group_message_buffer[chat_id]:
         await update.message.reply_text(
-            f"Buffer for this chat is EMPTY, master~ 💤\n"
+            f"Buffer for this chat is EMPTY~ 💤\n"
             f"Possible causes:\n"
             f"1. Bot privacy mode is ON — go to @BotFather → Bot Settings → Group Privacy → turn OFF\n"
             f"2. No messages in last {TLDR_WINDOW_HOURS}h\n"
@@ -2689,13 +2689,13 @@ def format_update_reply():
 def format_known_people(limit=40):
     """List the real people in Anna's memory (so she doesn't hallucinate names)."""
     if not _anna_memory:
-        return "Hmm~ I don't really remember anyone yet, master 🥺"
+        return "Hmm~ I don't really remember anyone yet 🥺"
     owner_id = get_owner_id()
     names = []
     for uid, e in _anna_memory.items():
         nm = e.get("preferred_name") or e.get("first_name") or "someone"
         if owner_id and str(uid) == str(owner_id):
-            nm = f"you ({nm}, my master 💕)"
+            nm = f"you ({nm}, my owner 💕)"
         names.append(nm)
     total = len(names)
     listed = ", ".join(names[:limit])
@@ -2993,23 +2993,23 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(p in text_lower for p in silence_on_phrases):
             if not is_global_silence():
                 set_global_silence(True)
-                await update.message.reply_text("Yes master~ I'll be quiet for everyone except you 💙")
+                await update.message.reply_text("Okay~ I'll be quiet for everyone except you 💙")
             else:
-                await update.message.reply_text("I'm already silent for them, master~ only listening to you 💕")
+                await update.message.reply_text("I'm already silent for them~ only listening to you 💕")
             return
 
         if any(p in text_lower for p in silence_off_phrases):
             if is_global_silence():
                 set_global_silence(False)
-                await update.message.reply_text("I'm back, master~ I'll talk to everyone again! ✨")
+                await update.message.reply_text("I'm back~ I'll talk to everyone again! ✨")
             else:
-                await update.message.reply_text("I was already talking to everyone, master~ 💫")
+                await update.message.reply_text("I was already talking to everyone~ 💫")
             return
 
         # Owner status check
         if any(p in text_lower for p in ["status", "how are you", "you okay"]):
             silence_status = "SILENT MODE 🔇" if is_global_silence() else "NORMAL MODE ✨"
-            await update.message.reply_text(f"I'm here for you, master~ {silence_status}. All systems green 💕")
+            await update.message.reply_text(f"I'm here for you~ {silence_status}. All systems green 💕")
             return
 
     # Natural language TLDR trigger
@@ -3129,7 +3129,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
 
-    # Owner gets devoted "master" treatment ONLY in private DMs.
+    # Owner gets devoted treatment ONLY in private DMs.
     # In groups, Anna treats the owner like everyone else.
     if is_owner_chat and is_private:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
@@ -3273,14 +3273,14 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cute_responses = [
                     f"{crypto_price}~ 💕",
                     f"{crypto_price} ✨",
-                    f"{crypto_price}, senpai~ 💙",
+                    f"{crypto_price}~ 💙",
                 ]
             else:
                 cute_responses = [
                     f"{crypto_price}~ 💕",
                     f"Current price: {crypto_price} 📈",
                     f"It's at {crypto_price} right now~ ✨",
-                    f"{crypto_price}, senpai~ 💙",
+                    f"{crypto_price}~ 💙",
                 ]
             reply = random.choice(cute_responses)
             add_to_history(chat_id, user_id, "assistant", reply)
@@ -3662,7 +3662,7 @@ async def diag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/diag — owner-only quick diagnostic of which providers are wired up and reachable."""
     track_user(update.effective_user)
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Mou~ this is for my master only 💙")
+        await update.message.reply_text("Mou~ this is for my owner only 💙")
         return
 
     lines = ["🔧 Anna diagnostic:"]
