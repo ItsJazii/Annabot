@@ -1031,14 +1031,36 @@ async def auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Only admins can use this command.")
         return
 
-    db.groups[chat_id] = {"auto_translate": True}
-    db.save_groups()
+    # Get the topic/thread ID if this is a forum group
+    thread_id = getattr(update.message, "message_thread_id", None)
 
-    await update.message.reply_text(
-        "Auto-translate enabled!\n"
-        "I'll automatically translate all non-English messages.\n"
-        "Use /disableauto to turn off."
-    )
+    group_data = db.groups.get(chat_id, {})
+    translate_threads = group_data.get("translate_threads", [])
+
+    if thread_id:
+        # Enable for this specific topic
+        if thread_id not in translate_threads:
+            translate_threads.append(thread_id)
+        group_data["auto_translate"] = True
+        group_data["translate_threads"] = translate_threads
+        db.groups[chat_id] = group_data
+        db.save_groups()
+        await update.message.reply_text(
+            "Auto-translate enabled for this topic! ✨\n"
+            "I'll translate non-English messages here.\n"
+            "Use /disableauto in this topic to turn off."
+        )
+    else:
+        # No topic — enable for the whole group
+        group_data["auto_translate"] = True
+        group_data["translate_threads"] = []  # empty = all threads
+        db.groups[chat_id] = group_data
+        db.save_groups()
+        await update.message.reply_text(
+            "Auto-translate enabled for the whole group!\n"
+            "I'll translate non-English messages everywhere.\n"
+            "Use /disableauto to turn off."
+        )
 
 
 async def disableauto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1054,14 +1076,36 @@ async def disableauto_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Only admins can use this command.")
         return
 
-    db.groups[chat_id] = {"auto_translate": False}
-    db.save_groups()
+    thread_id = getattr(update.message, "message_thread_id", None)
+    group_data = db.groups.get(chat_id, {})
+    translate_threads = group_data.get("translate_threads", [])
 
-    await update.message.reply_text(
-        "Auto-translate disabled.\n"
-        "Use @annatranlatorbot for inline translation.\n"
-        "Or reply to messages with /translate."
-    )
+    if thread_id and translate_threads:
+        # Remove just this topic from the list
+        if thread_id in translate_threads:
+            translate_threads.remove(thread_id)
+            group_data["translate_threads"] = translate_threads
+            if not translate_threads:
+                group_data["auto_translate"] = False
+            db.groups[chat_id] = group_data
+            db.save_groups()
+            await update.message.reply_text(
+                "Auto-translate disabled for this topic.\n"
+                "Use /auto in a topic to re-enable."
+            )
+        else:
+            await update.message.reply_text("Auto-translate wasn't enabled in this topic.")
+    else:
+        # Disable for the whole group
+        group_data["auto_translate"] = False
+        group_data["translate_threads"] = []
+        db.groups[chat_id] = group_data
+        db.save_groups()
+        await update.message.reply_text(
+            "Auto-translate disabled for this group.\n"
+            "Use @annatranlatorbot for inline translation.\n"
+            "Or reply to messages with /translate."
+        )
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1073,20 +1117,29 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     group_data = db.groups.get(chat_id, {})
-    auto_disabled = group_data.get("auto_translate") is False
+    auto_enabled = group_data.get("auto_translate", False)
+    translate_threads = group_data.get("translate_threads", [])
 
-    if auto_disabled:
+    if not auto_enabled:
         await update.message.reply_text(
             "Current mode: MANUAL\n"
-            "Auto-translate is disabled for this group.\n"
+            "Auto-translate is off.\n"
             "Reply to messages with /translate to translate them.\n"
-            "Admins can use /auto to re-enable auto-translation.\n"
+            "Admins can use /auto to enable auto-translation.\n"
             "Or use @annatranlatorbot for inline translation."
+        )
+    elif translate_threads:
+        thread_list = ", ".join(str(t) for t in translate_threads)
+        await update.message.reply_text(
+            "Current mode: AUTO-TRANSLATE (specific topics)\n"
+            f"Active in topic IDs: {thread_list}\n"
+            "Use /auto in a topic to add it.\n"
+            "Use /disableauto in a topic to remove it."
         )
     else:
         await update.message.reply_text(
-            "Current mode: AUTO-TRANSLATE\n"
-            "I'll automatically detect and translate non-English messages.\n"
+            "Current mode: AUTO-TRANSLATE (whole group)\n"
+            "I'll translate non-English messages everywhere.\n"
             "Admins can use /disableauto to turn off."
         )
 
@@ -1130,10 +1183,17 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
         if not is_owner(update.message.from_user.id):
             return
 
-    # If a group has explicitly disabled auto-translate with /disableauto, respect that
+    # Check if auto-translate is enabled and if this thread/topic is covered
     group_data = db.groups.get(chat_id, {})
-    if group_data.get("auto_translate") is False:
+    if not group_data.get("auto_translate", False):
         return
+
+    # If specific topics are set, only translate in those topics
+    translate_threads = group_data.get("translate_threads", [])
+    if translate_threads:
+        msg_thread_id = getattr(update.message, "message_thread_id", None)
+        if msg_thread_id not in translate_threads:
+            return
 
     text = update.message.text
 
@@ -1161,6 +1221,8 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
         if translated.lower().strip() == text.lower().strip():
             return
         # Send as a standalone message (not a reply) so the sender doesn't get pinged
+        # Send in the same topic/thread if applicable
+        msg_thread_id = getattr(update.message, "message_thread_id", None)
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -1168,6 +1230,7 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
                 f"👤 {sender_name} said:\n\n"
                 f"\"{translated}\""
             ),
+            message_thread_id=msg_thread_id,
         )
     except Exception as e:
         logger.error(f"Translation failed: {e}")
