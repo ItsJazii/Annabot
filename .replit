@@ -1,5 +1,0 @@
-run = "python main.py"
-language = "python3"
-
-[env]
-PYTHONPATH = "."
