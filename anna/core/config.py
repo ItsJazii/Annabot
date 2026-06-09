@@ -27,8 +27,8 @@ CMC_API_KEY = os.getenv("CMC_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Maintenance mode — flip to False when the rebuild is live
-MAINTENANCE_MODE = True
+# Maintenance mode — set to True to disable all handlers and auto-reply "under construction"
+MAINTENANCE_MODE = False
 
 MAINTENANCE_MESSAGE = (
     "\U0001f6a7 Hey! Anna is currently under construction and getting a HUGE update! \U0001f6a7\n\n"
