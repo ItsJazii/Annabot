@@ -1072,26 +1072,46 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("This command only works in groups.")
         return
 
-    auto_mode = db.groups.get(chat_id, {}).get("auto_translate", False)
+    group_data = db.groups.get(chat_id, {})
+    auto_disabled = group_data.get("auto_translate") is False
 
-    if auto_mode:
+    if auto_disabled:
         await update.message.reply_text(
-            "Current mode: AUTO-TRANSLATE\n"
-            "I'll translate non-English messages automatically.\n"
-            "Admins can use /disableauto to turn off."
+            "Current mode: MANUAL\n"
+            "Auto-translate is disabled for this group.\n"
+            "Reply to messages with /translate to translate them.\n"
+            "Admins can use /auto to re-enable auto-translation.\n"
+            "Or use @annatranlatorbot for inline translation."
         )
     else:
         await update.message.reply_text(
-            "Current mode: MANUAL\n"
-            "Reply to messages with /translate to translate them.\n"
-            "Admins can use /auto to enable auto-translation.\n"
-            "Or use @annatranlatorbot for inline translation."
+            "Current mode: AUTO-TRANSLATE\n"
+            "I'll automatically detect and translate non-English messages.\n"
+            "Admins can use /disableauto to turn off."
         )
 
 
 # =========================
 # AUTO-TRANSLATE MESSAGE HANDLER
 # =========================
+# Language code → friendly name mapping
+_LANG_NAMES = {
+    "af": "Afrikaans", "ar": "Arabic", "bg": "Bulgarian", "bn": "Bengali",
+    "ca": "Catalan", "cs": "Czech", "cy": "Welsh", "da": "Danish",
+    "de": "German", "el": "Greek", "es": "Spanish", "et": "Estonian",
+    "fa": "Persian", "fi": "Finnish", "fr": "French", "gu": "Gujarati",
+    "he": "Hebrew", "hi": "Hindi", "hr": "Croatian", "hu": "Hungarian",
+    "id": "Indonesian", "it": "Italian", "ja": "Japanese", "kn": "Kannada",
+    "ko": "Korean", "lt": "Lithuanian", "lv": "Latvian", "mk": "Macedonian",
+    "ml": "Malayalam", "mr": "Marathi", "ne": "Nepali", "nl": "Dutch",
+    "no": "Norwegian", "pa": "Punjabi", "pl": "Polish", "pt": "Portuguese",
+    "ro": "Romanian", "ru": "Russian", "sk": "Slovak", "sl": "Slovenian",
+    "so": "Somali", "sq": "Albanian", "sv": "Swedish", "sw": "Swahili",
+    "ta": "Tamil", "te": "Telugu", "th": "Thai", "tl": "Tagalog",
+    "tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese",
+    "zh-cn": "Chinese", "zh-tw": "Chinese",
+}
+
 async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -1110,10 +1130,16 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
         if not is_owner(update.message.from_user.id):
             return
 
-    if not db.groups.get(chat_id, {}).get("auto_translate", False):
+    # If a group has explicitly disabled auto-translate with /disableauto, respect that
+    group_data = db.groups.get(chat_id, {})
+    if group_data.get("auto_translate") is False:
         return
 
     text = update.message.text
+
+    # Skip commands and very short messages (likely not translatable)
+    if text.startswith("/") or len(text.strip()) < 3:
+        return
 
     try:
         detected_lang = detect(text)
@@ -1123,13 +1149,22 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
     if detected_lang == "en":
         return
 
+    # Get the sender's name
+    sender = update.message.from_user
+    sender_name = sender.first_name if sender else "Someone"
+
+    # Get friendly language name
+    lang_name = _LANG_NAMES.get(detected_lang, detected_lang.upper())
+
     try:
         translated = translator.translate(text)
         if translated.lower().strip() == text.lower().strip():
             return
-        cute_suffixes = [" ✨", " 💫", " 🌸", " ~", " hehe~", " 💙"]
-        suffix = random.choice(cute_suffixes)
-        await update.message.reply_text(f"🌸 {translated}{suffix}")
+        await update.message.reply_text(
+            f"🌐 Translation ({lang_name} → English)\n"
+            f"👤 {sender_name} said:\n\n"
+            f"\"{translated}\""
+        )
     except Exception as e:
         logger.error(f"Translation failed: {e}")
 
