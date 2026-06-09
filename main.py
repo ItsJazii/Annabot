@@ -3803,7 +3803,7 @@ def run_bot():
                             cache_time=5,
                         )
 
-                application.add_handler(MessageHandler(filters.ALL, maintenance_reply))
+                # Commands — reply to every slash command with the maintenance notice
                 application.add_handler(CommandHandler(
                     [c for c in [
                         "start", "help", "translate", "mute", "unmute", "kick",
@@ -3813,6 +3813,8 @@ def run_bot():
                         "forget", "learn", "unlearn", "learned", "vibe",
                         "diag", "reset", "retry",
                     ]], maintenance_reply))
+                # Private chats — reply to any DM (but NOT every group message to avoid spam)
+                application.add_handler(MessageHandler(filters.ChatType.PRIVATE, maintenance_reply))
                 application.add_handler(InlineQueryHandler(maintenance_inline))
 
                 logger.info("🚧 MAINTENANCE MODE is ON — all handlers bypassed.")
