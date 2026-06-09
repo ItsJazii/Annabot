@@ -33,7 +33,7 @@ def handle_message(msg: Message) -> Response | None:
 
     system_prompt = get_system_prompt(
         user_name=msg.user.display_name or msg.user.username or "friend",
-        is_owner=False,  # TODO: wire up owner check
+        is_owner=memory.is_owner(msg.user.id),
     )
 
     reply_text = ai.chat(messages, system_prompt=system_prompt)
