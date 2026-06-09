@@ -4,7 +4,7 @@ Uses the classifier to score message complexity:
 - Casual chat ("hey", "lol", "thanks") → fast tier (Groq/Cerebras, free)
 - Complex questions ("explain X", "write me Y") → smart tier (OpenRouter, paid)
 
-Also handles memory: loads context, saves messages, triggers summarization.
+Also handles memory, web search, and summarization.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from anna.core.message import Message, Response
 from anna.persona.prompts import get_system_prompt
 from anna.memory.store import memory
 from anna.memory.summarizer import summarize_conversation, extract_user_facts
+from anna.tools.search import needs_search, search
 
 
 def handle_message(msg: Message) -> Response | None:
@@ -31,12 +32,32 @@ def handle_message(msg: Message) -> Response | None:
     tier = classify(msg.text)
     logger.info(f"[router] '{msg.text[:50]}...' → {tier} tier")
 
+    # Check if this message needs a web search
+    search_context = ""
+    if needs_search(msg.text):
+        logger.info(f"[search] Searching for: {msg.text[:50]}")
+        search_context = search(msg.text)
+        if search_context:
+            logger.info(f"[search] Got results ({len(search_context)} chars)")
+            # Bump to smart tier for search queries so Anna processes results well
+            tier = "smart"
+
     # Build memory context
     memory_context = memory.build_context(msg.chat_id, msg.user.id)
 
     # Build conversation messages (recent history + current message)
     history = memory.get_history(msg.chat_id, msg.user.id)
-    messages = history + [{"role": "user", "content": msg.text}]
+
+    # If we have search results, inject them into the user message
+    if search_context:
+        augmented_text = (
+            f"{msg.text}\n\n"
+            f"[search results for context, use naturally in your response:\n"
+            f"{search_context}]"
+        )
+        messages = history + [{"role": "user", "content": augmented_text}]
+    else:
+        messages = history + [{"role": "user", "content": msg.text}]
 
     system_prompt = get_system_prompt(
         user_name=msg.user.display_name or msg.user.username or "friend",
@@ -48,11 +69,11 @@ def handle_message(msg: Message) -> Response | None:
     if not reply_text:
         return None
 
-    # Save to history
+    # Save to history (save original text, not augmented)
     memory.add_to_history(msg.chat_id, msg.user.id, "user", msg.text)
     memory.add_to_history(msg.chat_id, msg.user.id, "assistant", reply_text)
 
-    # Check if we need to summarize and extract facts (async-ish, best effort)
+    # Check if we need to summarize and extract facts (best effort)
     _maybe_update_memory(msg)
 
     return Response(text=reply_text, chat_id=msg.chat_id)
