@@ -1,4 +1,4 @@
-"""Anna's personality prompts — adapted from the Poke system prompt style.
+"""Anna's personality prompts.
 
 The full system prompt is stored as XML-structured text and injected into every
 AI call via `get_system_prompt()`. Sections can be updated independently.
