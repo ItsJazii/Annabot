@@ -1160,10 +1160,14 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
         translated = translator.translate(text)
         if translated.lower().strip() == text.lower().strip():
             return
-        await update.message.reply_text(
-            f"🌐 Translation ({lang_name} → English)\n"
-            f"👤 {sender_name} said:\n\n"
-            f"\"{translated}\""
+        # Send as a standalone message (not a reply) so the sender doesn't get pinged
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"🌐 Translation ({lang_name} → English)\n"
+                f"👤 {sender_name} said:\n\n"
+                f"\"{translated}\""
+            ),
         )
     except Exception as e:
         logger.error(f"Translation failed: {e}")
