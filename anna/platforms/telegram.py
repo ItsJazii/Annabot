@@ -5,6 +5,7 @@ Translates between Telegram's API and Anna's platform-agnostic Message model.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
@@ -30,6 +31,8 @@ def _normalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Message | 
         return None
 
     user = msg.from_user
+    if not user:
+        return None
     text = msg.text or ""
     bot_username = context.bot_data.get("username", "anna")
 
@@ -79,7 +82,7 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Track user
     memory.track_user(msg.user.username, msg.user.id)
 
-    response = handle_message(msg)
+    response = await asyncio.to_thread(handle_message, msg)
     if response and update.message:
         await update.message.reply_text(response.text)
 
@@ -93,7 +96,7 @@ async def _on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # For now, treat commands like normal messages routed through the AI
     memory.track_user(msg.user.username, msg.user.id)
 
-    response = handle_message(msg)
+    response = await asyncio.to_thread(handle_message, msg)
     if response:
         await update.message.reply_text(response.text)
 
