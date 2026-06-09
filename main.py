@@ -35,6 +35,19 @@ PORT = int(os.getenv("PORT", 10000))
 OWNER_ENV = os.getenv("BOT_OWNER_ID")
 STICKER_PACKS = ["koly_alcohol"]
 
+# =========================
+# MAINTENANCE MODE
+# =========================
+# Set to True to disable all commands and auto-reply with an "under construction" notice.
+# Flip back to False when the update is done.
+MAINTENANCE_MODE = True
+
+MAINTENANCE_MESSAGE = (
+    "🚧 Hey! Anna is currently under construction and getting a HUGE update! 🚧\n\n"
+    "All commands and features are temporarily disabled.\n"
+    "Try again later — I'll be back better than ever! 💖"
+)
+
 # Supabase config
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -3768,6 +3781,44 @@ def run_bot():
 
             # Register commands menu
             application.post_init = setup_commands
+
+            # --- Maintenance mode gate ---
+            if MAINTENANCE_MODE:
+                async def maintenance_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                    """Intercept every message/command and reply with the maintenance notice."""
+                    if update.message:
+                        await update.message.reply_text(MAINTENANCE_MESSAGE)
+                    elif update.callback_query:
+                        await update.callback_query.answer(MAINTENANCE_MESSAGE, show_alert=True)
+
+                async def maintenance_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                    """Intercept inline queries during maintenance."""
+                    if update.inline_query:
+                        await update.inline_query.answer(
+                            [InlineQueryResultArticle(
+                                id="maintenance",
+                                title="🚧 Anna is under construction!",
+                                input_message_content=InputTextMessageContent(MAINTENANCE_MESSAGE),
+                            )],
+                            cache_time=5,
+                        )
+
+                application.add_handler(MessageHandler(filters.ALL, maintenance_reply))
+                application.add_handler(CommandHandler(
+                    [c for c in [
+                        "start", "help", "translate", "mute", "unmute", "kick",
+                        "auto", "disableauto", "status", "setowner", "addadmin",
+                        "removeadmin", "listadmins", "goon", "image", "video",
+                        "tldr", "tldrdebug", "shutup", "speak", "memory",
+                        "forget", "learn", "unlearn", "learned", "vibe",
+                        "diag", "reset", "retry",
+                    ]], maintenance_reply))
+                application.add_handler(InlineQueryHandler(maintenance_inline))
+
+                logger.info("🚧 MAINTENANCE MODE is ON — all handlers bypassed.")
+                application.run_polling(drop_pending_updates=True)
+                backoff = 10
+                continue
 
             # Command handlers
             application.add_handler(CommandHandler("start", start_command))
