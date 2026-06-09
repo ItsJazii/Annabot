@@ -3222,10 +3222,16 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and not any(p in cleaned_for_topic for p in [
             "love", "hate", "like", "miss you", "thanks", "hi ", "hello",
             "good morning", "good night", "lol", "haha", "ok", "yes", "no",
+            "are you", "do you", "can you", "will you", "would you",
+            "how are", "you there", "you back", "you up", "you ok",
+            "what's up", "whats up", "sup", "wassup", "wyd", "wya",
         ])
     )
 
-    needs_search = (has_keyword or ends_with_question or looks_like_topic_lookup) and word_count >= 1
+    # Only search when there's a clear factual/lookup intent.
+    # A question mark alone is not enough — "are you back?" is chat, not a search.
+    # Require a search keyword OR a topic lookup pattern. Question mark just boosts confidence.
+    needs_search = (has_keyword or (looks_like_topic_lookup and ends_with_question)) and word_count >= 2
 
     # When Anna is answering a real question with web data, allow her a bit more room
     if needs_search:
