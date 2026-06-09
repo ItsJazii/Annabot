@@ -2224,7 +2224,7 @@ async def tldr_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def capture_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Silently capture all group messages for TLDR buffer."""
+    """Silently capture all group messages for TLDR buffer + silent helper tracking."""
     if not update.message:
         return
 
@@ -2240,11 +2240,54 @@ async def capture_group_message(update: Update, context: ContextTypes.DEFAULT_TY
     # Skip bot's own messages to avoid infinite loops, but DO capture them for TLDR
     # We capture everything except commands
     username = user.first_name or user.username or "Someone"
+    is_bot_message = user.is_bot
+
+    # --- Silent helper: track replies to pending questions ---
+    if update.message.reply_to_message and not is_bot_message:
+        replied_msg_id = update.message.reply_to_message.message_id
+        key = (chat_id, replied_msg_id)
+        if key in _pending_questions:
+            _pending_questions[key]["replied"] = True
+
+    # --- Silent helper: also count any message within 35s as a potential answer ---
+    # If someone sends a message in the same chat (not the question asker), mark nearby questions as replied
+    if not is_bot_message and update.message.text and not update.message.text.startswith("/"):
+        for key, q_data in list(_pending_questions.items()):
+            if key[0] == chat_id and q_data["user_id"] != user.id:
+                # Someone other than the asker sent a message — likely an answer
+                q_data["replied"] = True
 
     # Capture text messages
     if update.message.text and not update.message.text.startswith("/"):
         _add_message_to_buffer(chat_id, username, update.message.text, "text")
         logger.debug(f"TLDR captured text in {chat_id}: {username} said {update.message.text[:30]}...")
+
+        # --- Silent helper: detect questions and schedule delayed check ---
+        if not is_bot_message and _is_question_worth_answering(update.message.text):
+            msg_id = update.message.message_id
+            key = (chat_id, msg_id)
+            _pending_questions[key] = {
+                "text": update.message.text,
+                "user": username,
+                "user_id": user.id,
+                "timestamp": time.time(),
+                "replied": False,
+            }
+            # Schedule delayed check
+            context.job_queue.run_once(
+                _silent_helper_check,
+                when=SILENT_HELPER_DELAY,
+                data={
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": update.message.text,
+                    "user": username,
+                    "user_id": user.id,
+                },
+                name=f"silent_helper_{chat_id}_{msg_id}",
+            )
+            logger.info(f"Silent helper: tracking question in {chat_id} from {username}: {update.message.text[:50]}...")
+
         return
 
     # Capture photo captions
@@ -2807,6 +2850,201 @@ _group_message_buffer = {}
 TLDR_WINDOW_HOURS = 6
 TLDR_COOLDOWN_SECONDS = 60
 _tldr_cooldown = {}  # {chat_id: last_used_timestamp}
+
+
+# =========================
+# SILENT HELPER — Anna watches group chat and helps unanswered questions
+# =========================
+SILENT_HELPER_DELAY = 35  # seconds to wait before jumping in
+_pending_questions = {}  # {(chat_id, message_id): {"text": ..., "user": ..., "user_id": ..., "timestamp": ..., "replied": False}}
+_silent_helper_cooldown = {}  # {chat_id: last_helped_timestamp} — prevent spam
+
+
+def _is_question_worth_answering(text):
+    """Quick heuristic: does this message look like a real question someone might need help with?
+    Returns True for factual/searchable questions, False for social/rhetorical ones."""
+    text_lower = text.lower().strip()
+    words = text_lower.split()
+    word_count = len(words)
+
+    # Too short or too long — probably not a real question
+    if word_count < 3 or word_count > 60:
+        return False
+
+    # Skip commands
+    if text_lower.startswith("/"):
+        return False
+
+    # Social/rhetorical patterns Anna should ignore
+    social_patterns = [
+        "anyone wanna", "anyone want to", "who wants to", "who wanna",
+        "anyone down", "who's down", "whos down", "anyone up for",
+        "anyone free", "who's free", "whos free",
+        "good morning", "good night", "gm", "gn",
+        "lol", "lmao", "haha", "bruh",
+        "how are you", "how r u", "how's everyone", "what's up",
+        "wyd", "wya", "sup", "wassup",
+        "anyone there", "anyone here", "hello", "hi everyone",
+    ]
+    for pattern in social_patterns:
+        if pattern in text_lower:
+            return False
+
+    # Question indicators
+    has_question_mark = "?" in text
+    question_starters = [
+        "what is", "what's", "whats", "what are", "what does", "what do",
+        "how to", "how do", "how does", "how can", "how much", "how many",
+        "who is", "who's", "whos", "who are", "who was",
+        "where is", "where's", "wheres", "where can", "where do",
+        "when is", "when's", "whens", "when does", "when do",
+        "why is", "why does", "why do", "why are",
+        "can anyone", "can someone", "does anyone", "does someone",
+        "anyone know", "does anybody", "anybody know",
+        "is there", "is it", "are there",
+        "price of", "worth of", "meaning of",
+        "explain", "define",
+    ]
+    starts_with_question = any(text_lower.startswith(q) for q in question_starters)
+    contains_question = any(q in text_lower for q in question_starters)
+
+    # Must have a question mark OR a clear question pattern
+    if has_question_mark and (starts_with_question or contains_question or word_count >= 4):
+        return True
+    if starts_with_question or contains_question:
+        return True
+
+    # "anyone know" / "does anyone" patterns without question mark
+    help_patterns = ["anyone know", "does anyone know", "somebody help", "someone help",
+                     "can someone explain", "need help with", "help me with",
+                     "looking for", "recommend", "suggestion for"]
+    if any(p in text_lower for p in help_patterns):
+        return True
+
+    return False
+
+
+async def _silent_helper_check(context: ContextTypes.DEFAULT_TYPE):
+    """Called after SILENT_HELPER_DELAY seconds. Check if the question was answered."""
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
+    message_id = job_data["message_id"]
+    question_text = job_data["text"]
+    sender_name = job_data["user"]
+    sender_id = job_data["user_id"]
+
+    key = (chat_id, message_id)
+
+    # Check if someone already replied
+    if key in _pending_questions and _pending_questions[key].get("replied"):
+        del _pending_questions[key]
+        return
+
+    # Clean up
+    if key in _pending_questions:
+        del _pending_questions[key]
+
+    # Cooldown — don't help more than once per 60 seconds per chat
+    now = time.time()
+    if chat_id in _silent_helper_cooldown:
+        if now - _silent_helper_cooldown[chat_id] < 60:
+            return
+
+    # Don't help if Anna is silenced
+    if is_global_silence():
+        return
+
+    # Use AI to decide if it's worth answering AND generate the answer
+    system_prompt = f"""You are Anna, a cute anime girl assistant in a Telegram group chat.
+Someone asked a question in the group and nobody answered for {SILENT_HELPER_DELAY} seconds.
+
+TASK: First decide if this question is something you can actually help with. Then answer it.
+
+Rules:
+- If it's a factual question you can answer (tech, prices, definitions, how-to, general knowledge) → answer it helpfully
+- If it's asking for personal opinions from the group, social plans, or something you genuinely can't help with → respond with just the word SKIP
+- If it's about reminders, calendar, email, scheduling → offer to help: mention you could handle that if they message you privately
+- Keep your answer SHORT (1-3 sentences max), in Anna's cute personality
+- Start with something natural like "nobody answered so~" or "hey i think i can help~" or "ooh i know this one~"
+- Do NOT be preachy or lecture-y. Just answer casually.
+- Do NOT use asterisk actions like *smiles*
+- Stay in character as Anna
+
+The question from {sender_name}: "{question_text}"
+
+If you cannot help, respond with exactly: SKIP"""
+
+    response = None
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question_text}]
+
+    # Try with web search first for factual questions
+    if openrouter_search_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: openrouter_search_client.chat.completions.create(
+                    model=OPENROUTER_MODEL,
+                    messages=messages,
+                    max_tokens=200,
+                    temperature=0.7,
+                    extra_body={"plugins": [{"id": "web", "max_results": 3}]}
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Silent helper search failed: {e}")
+
+    # Fallback to regular AI
+    if not response and openrouter_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: openrouter_client.chat.completions.create(
+                    model=OPENROUTER_MODEL,
+                    messages=messages,
+                    max_tokens=200,
+                    temperature=0.7
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Silent helper OpenRouter failed: {e}")
+
+    if not response and groq_client:
+        try:
+            response = await asyncio.to_thread(
+                lambda: groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    max_tokens=200,
+                    temperature=0.7
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Silent helper Groq failed: {e}")
+
+    if not response or not response.choices:
+        return
+
+    reply = response.choices[0].message.content.strip()
+
+    # If AI decided to skip, respect that
+    if reply.upper().strip() == "SKIP" or reply.lower().startswith("skip"):
+        logger.info(f"Silent helper skipped question in {chat_id}: {question_text[:50]}")
+        return
+
+    # Sanitize
+    reply = _sanitize_reply(reply, user_text=question_text, max_chars=500)
+    if not reply:
+        return
+
+    # Send as a reply to the original question
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=reply,
+            reply_to_message_id=message_id
+        )
+        _silent_helper_cooldown[chat_id] = now
+        logger.info(f"Silent helper answered in {chat_id}: {reply[:60]}")
+    except Exception as e:
+        logger.error(f"Silent helper send failed: {e}")
 
 
 # =========================
