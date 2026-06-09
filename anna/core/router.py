@@ -15,11 +15,7 @@ from anna.memory.store import memory
 
 
 def handle_message(msg: Message) -> Response | None:
-    """Process an incoming message and return a response (or None to stay silent)."""
-
-    # In groups, only respond if mentioned or replied to
-    if not msg.is_private and not msg.mentions_bot and not msg.reply_to_bot:
-        return None
+    """Process an incoming DM and return a response."""
 
     if not msg.text.strip():
         return None
