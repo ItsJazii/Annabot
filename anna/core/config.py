@@ -18,7 +18,7 @@ PORT = int(os.getenv("PORT", 10000))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-1.5-pro")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o")
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
