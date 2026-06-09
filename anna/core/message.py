@@ -21,16 +21,13 @@ class User:
 
 @dataclass
 class Message:
-    """A single incoming message from any platform."""
+    """A single incoming DM from any platform."""
     platform: str                       # "telegram", "discord", "whatsapp", etc.
-    chat_id: str                        # Unique chat/channel identifier
+    chat_id: str                        # Unique chat/conversation identifier
     user: User                          # Who sent it
     text: str = ""                      # Message body
-    is_private: bool = False            # DM vs group
     is_command: bool = False            # Starts with / or similar
     command: Optional[str] = None       # e.g. "start", "help" (without /)
-    reply_to_bot: bool = False          # Is this a reply to Anna?
-    mentions_bot: bool = False          # Does it mention Anna by name?
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     raw: object = None                  # Original platform-specific object for passthrough
 
