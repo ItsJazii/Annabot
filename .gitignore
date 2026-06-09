@@ -12,7 +12,8 @@ build/
 .venv/
 venv/
 ENV/
+.dustin_session
+.anna_session
 *.session
 *.session-journal
-*.json
-!render.yaml
+PROJECT_STATUS.md
